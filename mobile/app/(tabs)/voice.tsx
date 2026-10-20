@@ -31,9 +31,8 @@ import {
 } from "@tamiltrade/shared";
 import {
   Mic,
-  Sparkles,
+  ReceiptText,
   History,
-  Keyboard,
   ArrowUp,
   Wallet,
   Package,
@@ -156,11 +155,11 @@ type SpeechSettings = {
 const states = {
   idle: "Ready when you are",
   recording: "Listening · tap to finish",
-  uploading: "Uploading your recording…",
-  queued: "Waiting for the speech engine…",
-  transcribing: "Transcribing your Tamil and English recording…",
-  understanding: "Understanding your business command…",
-  completed: "Review the result below",
+  uploading: "Uploading recording…",
+  queued: "Preparing recording…",
+  transcribing: "Transcribing…",
+  understanding: "Preparing details…",
+  completed: "Ready to review",
   error: "Something needs your attention",
   cancelled: "Recording cancelled",
 };
@@ -538,16 +537,8 @@ export default function Voice() {
   const answer = result?.answer;
   return (
     <Screen
-      maxWidth={860}
-      variant="assistant"
-      title={copy(
-        "Your voice. Your business.",
-        "உங்கள் குரலில், உங்கள் கணக்கு.",
-      )}
-      subtitle={copy(
-        "Speak or type. I'll ask for anything missing.",
-        "பேசுங்கள் அல்லது எழுதுங்கள். மீதி விவரங்களைக் கேட்கிறேன்.",
-      )}
+      maxWidth={800}
+      title={copy("Voice", "குரல் பதிவு")}
       action={
         <Pressable
           accessibilityRole="button"
@@ -559,10 +550,8 @@ export default function Voice() {
             gap: 7,
             paddingHorizontal: 14,
             paddingVertical: 10,
-            borderRadius: 12,
-            borderWidth: 1,
-            borderColor: c.border,
-            backgroundColor: c.surface,
+            minHeight: 44,
+            borderRadius: 10,
             opacity: pressed ? 0.7 : 1,
           })}
         >
@@ -573,7 +562,14 @@ export default function Voice() {
         </Pressable>
       }
     >
-      <View style={{ alignItems: "center", gap: 4 }}>
+      <View
+        style={{
+          alignItems: "center",
+          gap: 10,
+          paddingTop: 12,
+          paddingBottom: 8,
+        }}
+      >
         <VoiceMicrophoneButton
           compact
           recording={audio.isRecording}
@@ -583,7 +579,7 @@ export default function Voice() {
           levels={levels}
         />
         <T
-          size={14}
+          size={13}
           color={c.muted}
           accessibilityLiveRegion="polite"
           style={{ textAlign: "center" }}
@@ -593,13 +589,17 @@ export default function Voice() {
           job.failureReason.status === 429
             ? "Waiting before checking your recording again…"
             : state === "idle"
-              ? "Tap the mic to speak"
+              ? copy("Tap to record", "பதிவு செய்யத் தொடுங்கள்")
               : state === "queued" && job.data?.queue?.workerOnline === false
                 ? "Speech processing is offline · recording safely queued"
                 : state === "queued" &&
                     (job.data?.queue?.waitedSeconds ?? 0) >= 20
                   ? "Speech processing is busy · your recording is queued"
-                  : states[state]}
+                  : state === "completed"
+                    ? result?.followUp
+                      ? "Reply below"
+                      : states.completed
+                    : states[state]}
         </T>
         {result?.understanding?.fallback && state === "completed" && (
           <T size={12} color={c.muted} accessibilityLiveRegion="polite">
@@ -759,15 +759,15 @@ export default function Voice() {
           </Row>
         </Card>
       )}
-      <View style={{ gap: 10 }}>
+      <View>
         <View
           style={{
-            borderRadius: 20,
+            borderRadius: 16,
             borderWidth: 1,
             borderColor: composerFocused ? c.accent : c.border,
             backgroundColor: c.surface,
-            padding: 16,
-            gap: 10,
+            padding: width < 360 ? 14 : 18,
+            gap: 16,
           }}
         >
           <TextInput
@@ -786,15 +786,15 @@ export default function Voice() {
             placeholder={
               result?.followUp
                 ? "Speak or type your reply…"
-                : "e.g. Sold 10 bags to Kishore at ₹3,000 each"
+                : "Describe a transaction or ask a question…"
             }
             placeholderTextColor={c.muted}
             style={{
               color: c.text,
               fontFamily: "Inter",
               fontSize: 15,
-              lineHeight: 26,
-              minHeight: 52,
+              lineHeight: 24,
+              minHeight: 64,
               maxHeight: 140,
               borderWidth: 0,
               borderColor: "transparent",
@@ -819,7 +819,6 @@ export default function Voice() {
                 flex: 1,
               }}
             >
-              <Keyboard size={16} color={c.muted} />
               <T size={width < 360 ? 10 : 11} color={c.muted}>
                 Tamil · Tanglish · English
               </T>
@@ -862,14 +861,11 @@ export default function Voice() {
             </Pressable>
           </Row>
         </View>
-        <T size={11} color={c.muted} style={{ textAlign: "center" }}>
-          Nothing is saved until you review and confirm.
-        </T>
       </View>
       {result && !result.followUp && (
         <Card>
           <Row>
-            <Sparkles color={c.accent} size={18} />
+            <ReceiptText color={c.muted} size={18} />
             <T weight="bold">
               {result.followUp
                 ? "One more detail"
@@ -879,7 +875,7 @@ export default function Voice() {
                     ? answer
                       ? "Saved transaction details"
                       : "Choose the account"
-                    : "Here’s what I understood"}
+                    : "Transaction details"}
             </T>
           </Row>
           {!result.followUp &&
@@ -1115,13 +1111,11 @@ export default function Voice() {
           {[
             {
               title: "Today's sales",
-              hint: "",
               icon: Wallet,
               command: "How much sales has happened today?",
             },
             {
               title: "Check stock",
-              hint: "",
               icon: Package,
               command: "ஸ்டாக் எவ்வளவு இருக்கு?",
             },
@@ -1141,10 +1135,8 @@ export default function Voice() {
                 paddingHorizontal: 14,
                 flexDirection: "row",
                 alignItems: "center",
-                borderRadius: 13,
-                borderWidth: 1,
-                borderColor: c.border,
-                backgroundColor: c.surface,
+                borderRadius: 10,
+                backgroundColor: pressed ? c.elevated : "transparent",
                 opacity:
                   processing || coolingDown || audio.isRecording
                     ? 0.5
