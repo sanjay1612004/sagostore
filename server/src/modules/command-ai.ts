@@ -126,7 +126,9 @@ export type CommandAiOptions = {
   apiKey: string;
   model: string;
   timeoutMs: number;
+  gemini?: { apiKey: string; model: string };
 };
+type CommandProvider = "groq" | "gemini";
 const kinds: Partial<Record<Intent, TradeInput["kind"]>> = {
   CREATE_PURCHASE: "purchase",
   CREATE_SALE: "sale",
@@ -177,22 +179,104 @@ export async function extractCommand(
   catalog: CommandCatalog,
   options: CommandAiOptions,
 ): Promise<CommandPlan> {
-  if (!options.apiKey.trim())
-    throw new AppError(
-      503,
-      "AI_NOT_CONFIGURED",
-      "AI command understanding is not configured. Ask the owner to add the Groq key on the server, or enter the transaction manually.",
-    );
-  const quotaKey = createHash("sha256")
-    .update(`${options.apiKey.trim()}:${options.model}`)
+  return (await extractWithProvider(text, catalog, options)).plan;
+}
+
+async function extractWithProvider(
+  text: string,
+  catalog: CommandCatalog,
+  options: CommandAiOptions,
+) {
+  const signal = AbortSignal.timeout(options.timeoutMs);
+  try {
+    const plan = await extractGroq(text, catalog, options, signal);
+    return {
+      plan,
+      provider: "groq" as const,
+      model: options.model,
+      fallback: false,
+    };
+  } catch (error) {
+    // Quota failures are safe to switch: extraction has no financial side effects.
+    // Never switch after malformed output, refusal, auth errors or a timeout.
+    if (
+      !(error instanceof AppError) ||
+      error.code !== "AI_RATE_LIMIT" ||
+      !options.gemini?.apiKey.trim()
+    )
+      throw error;
+    try {
+      const plan = await extractGemini(text, catalog, options.gemini, signal);
+      return {
+        plan,
+        provider: "gemini" as const,
+        model: options.gemini.model,
+        fallback: true,
+      };
+    } catch (fallbackError) {
+      if (
+        fallbackError instanceof AppError &&
+        fallbackError.code === "AI_RATE_LIMIT"
+      ) {
+        throw new AppError(
+          429,
+          "AI_RATE_LIMIT",
+          rateLimitMessage,
+          Math.min(
+            error.retryAfterSeconds ?? 60,
+            fallbackError.retryAfterSeconds ?? 60,
+          ),
+        );
+      }
+      throw fallbackError;
+    }
+  }
+}
+
+function quotaFingerprint(
+  provider: CommandProvider,
+  apiKey: string,
+  model: string,
+) {
+  return createHash("sha256")
+    .update(`${provider}:${apiKey.trim()}:${model}`)
     .digest("hex");
+}
+function checkQuota(quotaKey: string) {
   const remaining = Math.ceil(
     ((cooldowns.get(quotaKey) ?? 0) - Date.now()) / 1000,
   );
   if (remaining > 0)
     throw new AppError(429, "AI_RATE_LIMIT", rateLimitMessage, remaining);
   cooldowns.delete(quotaKey);
-  const signal = AbortSignal.timeout(options.timeoutMs);
+}
+function rememberQuota(quotaKey: string, retry: number) {
+  for (const [key, until] of cooldowns)
+    if (until <= Date.now()) cooldowns.delete(key);
+  cooldowns.set(quotaKey, Date.now() + retry * 1000);
+}
+function commandPayload(text: string, catalog: CommandCatalog) {
+  return JSON.stringify({
+    today: indiaDate(),
+    ...providerContext(catalog),
+    command: text,
+  });
+}
+
+async function extractGroq(
+  text: string,
+  catalog: CommandCatalog,
+  options: CommandAiOptions,
+  signal: AbortSignal,
+): Promise<CommandPlan> {
+  if (!options.apiKey.trim())
+    throw new AppError(
+      503,
+      "AI_NOT_CONFIGURED",
+      "AI command understanding is not configured. Ask the owner to add the Groq key on the server, or enter the transaction manually.",
+    );
+  const quotaKey = quotaFingerprint("groq", options.apiKey, options.model);
+  checkQuota(quotaKey);
   let response: Response;
   try {
     response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -209,11 +293,7 @@ export async function extractCommand(
           { role: "system", content: instructions },
           {
             role: "user",
-            content: JSON.stringify({
-              today: indiaDate(),
-              ...providerContext(catalog),
-              command: text,
-            }),
+            content: commandPayload(text, catalog),
           },
         ],
         temperature: 0,
@@ -246,9 +326,7 @@ export async function extractCommand(
     );
   if (response.status === 429) {
     const retry = quotaRetrySeconds(response.headers);
-    for (const [key, until] of cooldowns)
-      if (until <= Date.now()) cooldowns.delete(key);
-    cooldowns.set(quotaKey, Date.now() + retry * 1000);
+    rememberQuota(quotaKey, retry);
     throw new AppError(429, "AI_RATE_LIMIT", rateLimitMessage, retry);
   }
   if (!response.ok)
@@ -283,6 +361,144 @@ export async function extractCommand(
   if (!envelope.success || envelope.data.choices[0]!.message.refusal)
     throw invalidResponse("envelope");
   const content = envelope.data.choices[0]!.message.content;
+  return parseCommandContent(content);
+}
+
+async function extractGemini(
+  text: string,
+  catalog: CommandCatalog,
+  options: { apiKey: string; model: string },
+  signal: AbortSignal,
+): Promise<CommandPlan> {
+  const quotaKey = quotaFingerprint("gemini", options.apiKey, options.model);
+  checkQuota(quotaKey);
+  let response: Response;
+  try {
+    response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(options.model)}:generateContent`,
+      {
+        method: "POST",
+        redirect: "error",
+        signal,
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": options.apiKey.trim(),
+        },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: instructions }] },
+          contents: [
+            { role: "user", parts: [{ text: commandPayload(text, catalog) }] },
+          ],
+          generationConfig: {
+            temperature: 0,
+            maxOutputTokens: 1500,
+            thinkingConfig: { thinkingLevel: "MINIMAL" },
+            responseMimeType: "application/json",
+            responseJsonSchema: providerJsonSchema,
+          },
+        }),
+      },
+    );
+  } catch {
+    throw new AppError(
+      503,
+      signal.aborted ? "AI_TIMEOUT" : "AI_UNAVAILABLE",
+      signal.aborted
+        ? "AI understanding timed out. Your command is preserved; try again or enter it manually."
+        : "The backup AI service could not be reached. Your command is preserved; try again shortly.",
+    );
+  }
+  if (response.status === 429) {
+    // Read only typed retry metadata, never expose the provider message/body.
+    const body = await response.json().catch(() => null);
+    const metadata = z
+      .object({
+        error: z.object({
+          details: z
+            .array(
+              z.object({
+                "@type": z.string(),
+                retryDelay: z.string().optional(),
+              }),
+            )
+            .optional(),
+        }),
+      })
+      .safeParse(body);
+    const delays = metadata.success
+      ? (metadata.data.error.details ?? [])
+          .filter(
+            (detail) =>
+              detail["@type"] === "type.googleapis.com/google.rpc.RetryInfo",
+          )
+          .map((detail) => resetSeconds(detail.retryDelay ?? null))
+          .filter((delay): delay is number => delay !== undefined)
+      : [];
+    const headerDelay = retryAfterSeconds(response.headers.get("retry-after"));
+    const retry = Math.max(
+      1,
+      ...(headerDelay === undefined ? [] : [headerDelay]),
+      ...delays,
+      ...(!delays.length && headerDelay === undefined ? [60] : []),
+    );
+    rememberQuota(quotaKey, retry);
+    throw new AppError(429, "AI_RATE_LIMIT", rateLimitMessage, retry);
+  }
+  if ([400, 401, 403, 404].includes(response.status))
+    throw new AppError(
+      503,
+      "AI_CONFIGURATION",
+      "The backup AI service rejected its configuration. Ask the owner to check the Gemini key and model access.",
+    );
+  if (!response.ok)
+    throw new AppError(
+      503,
+      "AI_UNAVAILABLE",
+      "The backup AI service is temporarily unavailable. Your command is preserved; try again shortly.",
+    );
+  const body = await response.json().catch(() => null);
+  if (signal.aborted)
+    throw new AppError(
+      503,
+      "AI_TIMEOUT",
+      "AI understanding timed out. Your command is preserved; try again or enter it manually.",
+    );
+  const envelope = z
+    .object({
+      promptFeedback: z
+        .object({ blockReason: z.string().optional() })
+        .optional(),
+      candidates: z
+        .array(
+          z.object({
+            finishReason: z.literal("STOP"),
+            content: z.object({
+              role: z.literal("model"),
+              parts: z
+                .array(
+                  z.object({
+                    text: z.string().optional(),
+                    thought: z.boolean().optional(),
+                  }),
+                )
+                .min(1),
+            }),
+          }),
+        )
+        .length(1),
+    })
+    .safeParse(body);
+  if (!envelope.success || envelope.data.promptFeedback?.blockReason)
+    throw invalidResponse("envelope");
+  const parts = envelope.data.candidates[0]!.content.parts.filter(
+    (part) => !part.thought,
+  );
+  if (parts.some((part) => part.text === undefined))
+    throw invalidResponse("envelope");
+  return parseCommandContent(parts.map((part) => part.text).join(""));
+}
+
+function parseCommandContent(content: string): CommandPlan {
   let json: unknown;
   try {
     json = JSON.parse(content);
@@ -650,7 +866,6 @@ export function validateCommandPlan(
       !candidateContactIds.length,
     contactId: input.contactId,
     query: plan.query,
-    understanding: { provider: "groq" as const },
   };
 }
 
@@ -674,7 +889,11 @@ export async function interpretCommand(
   catalog: CommandCatalog,
   options: CommandAiOptions,
 ) {
-  const plan = await extractCommand(text, catalog, options);
+  const { plan, ...understanding } = await extractWithProvider(
+    text,
+    catalog,
+    options,
+  );
   const write =
     Boolean(kinds[plan.intent]) || plan.intent === "UPDATE_PENDING_DRAFT";
   const pendingInput = { ...catalog.context.pendingInput };
@@ -687,7 +906,10 @@ export async function interpretCommand(
   // that failed validation stays unset and must be resolved by the user.
   for (;;) {
     try {
-      return validateCommandPlan(plan, text, validationCatalog);
+      return {
+        ...validateCommandPlan(plan, text, validationCatalog),
+        understanding,
+      };
     } catch (error) {
       if (
         !write ||

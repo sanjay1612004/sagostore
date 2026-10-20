@@ -1,6 +1,8 @@
-# TamilTrade AI
+# Shri Sai Ganesh Stores
 
-A Tamil-first Expo trading app for **SAI GANESH STORE** with an Express API, MongoDB transactions, configurable cloud or local speech recognition, and invoice PDF sharing.
+A Tamil-first Expo trading app for **Shri Sai Ganesh Stores** with an Express API, MongoDB transactions, configurable cloud or local speech recognition, and invoice PDF sharing.
+
+The header uses the full store name and the supplied Ganesha lotus emblem with a transparent background. The sun/moon button beside the home profile button switches between dark and light appearance and saves the preference. Branding assets, including the transparent master logo, launcher icon, Android adaptive foreground and browser favicon, are in `mobile/assets/branding`; [asset notes](mobile/assets/branding/README.md) describe the source and background-removal prompts. Reload Expo Go for interface changes; the installed app's launcher name/icon require a new native build.
 
 **Status:** the core source and local automated workflows are implemented. This is not yet a deployed or device-accepted production release. No Atlas project, Oracle VM, API domain, or physical phone was supplied. See [delivery status](docs/testing/STATUS.md) for tested behavior and remaining requirements.
 
@@ -50,7 +52,7 @@ The voice tab uses **Groq Qwen 3.8 27B** to understand Tamil, Tanglish and Engli
 
 For an incomplete transaction, the assistant asks one missing detail at a time and reads the question in the selected app language. Tap **Reply by voice**, answer in Tamil, Tanglish or English, then tap **Finish reply**. Answers update the same pending transaction; you can give several details in one reply. Source lots and outstanding transactions have numbered choices that you can select by voice. Once complete, use **Review & save**, check the details, then **Confirm & save**. Speech output uses the device's available voices; the question remains visible if speech output is unavailable. **Hear the question again**, **Start over** and manual editing remain available.
 
-Set the server-only `GROQ_API_KEY` from the Groq Free plan. Free quotas and provider availability apply; the app does not switch to another model/provider or a rule parser. Commands, relevant catalog names/aliases and recent context are sent to Groq. [AI setup](docs/deployment/COMMAND_AI.md) includes configuration, testing and limits.
+Set the server-only `GROQ_API_KEY` from the Groq Free plan. Optionally add `GEMINI_API_KEY` from an AI Studio project with billing disabled: when Groq reaches its quota, the app switches once to Gemini Flash-Lite and returns to Groq after its cooldown. Both providers' quotas still apply. Commands, relevant catalog names/aliases and recent context go to the provider used; results identify Gemini backup use. All results pass the same server validation and explicit confirmation. [AI setup](docs/deployment/COMMAND_AI.md) includes configuration, testing and limits.
 
 For mixed-language recordings, [speech setup](docs/deployment/SPEECH.md) covers Sarvam Saaras v4 cloud recognition and the local Whisper alternative. Cloud mode requires a server-side Sarvam API key and sends recordings to that service. Extracted values remain editable; voice never directly writes financial records.
 
@@ -58,7 +60,7 @@ For saved entries, ask `Kishore transaction details kaattu`, `Kishore ku evlo mo
 
 ## Checks
 
-The refreshed interface includes fresh light and charcoal blue appearances, a responsive financial dashboard and colored action/status cards. The voice screen uses a soft blue ambient glow, compact microphone and rounded command composer. Fresh light is the default for new preferences; existing appearance choices are preserved. Change it under **More → Appearance & language → Appearance**.
+The interface uses a restrained charcoal-and-emerald palette inspired by the supplied Stitch reference, with a matching light appearance. Home prioritizes today's figures, three daily transaction actions, outstanding balances and recent activity. Detailed reporting remains available under Reports. More groups existing tools into Business, Insights and Manage. The voice screen asks one missing detail at a time, with spoken replies or tappable saved choices, followed by explicit review. Optional form details stay collapsed; review shows nonzero charges and tax. Charcoal is the default for new preferences; existing appearance choices are preserved. Change it under **More → Appearance & language → Appearance**.
 
 ```bash
 npm run check
@@ -77,7 +79,7 @@ Integration tests run a temporary MongoDB **replica set solely for testing**, wi
 | `mobile/app`         | Native routes, business forms, voice recording and sharing       |
 | `mobile/components`  | Theme-aware reusable native components and Skia microphone       |
 | `packages/shared`    | Zod contracts and API types                                      |
-| `server/src/modules` | Auth, trading, reporting, Groq extraction/validation, invoices |
+| `server/src/modules` | Auth, trading, reporting, Groq extraction/validation, invoices   |
 | `server/src/workers` | Bounded audio-processing worker                                  |
 | `speech`             | Pinned CPU build, verified model download and benchmark tools    |
 | `infra`              | Oracle/Caddy/systemd templates, deployment and encrypted backups |

@@ -13,6 +13,7 @@ import {
 } from "../../components/ui";
 import { post } from "../../services/api";
 import { useSession, type Credentials } from "../../store/session";
+import { STORE_NAME } from "../../config/brand";
 import { useTheme } from "../../theme";
 export default function Setup() {
   const c = useTheme();
@@ -29,7 +30,7 @@ export default function Setup() {
     resolver: zodResolver(registerSchema),
     defaultValues: {
       name: "",
-      businessName: "SAI GANESH STORE",
+      businessName: STORE_NAME,
       businessType: "Wholesale trading",
       email: "",
       password: "",

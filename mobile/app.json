@@ -1,6 +1,7 @@
 {
   "expo": {
-    "name": "TamilTrade AI",
+    "name": "Shri Sai Ganesh Stores",
+    "icon": "./assets/branding/icon.png",
     "slug": "tamiltrade-ai",
     "scheme": "tamiltrade",
     "version": "0.1.0",
@@ -11,11 +12,15 @@
       "bundleIdentifier": "com.tamiltrade.ai",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Record Tamil business commands for your review and confirmation.",
-        "NSFaceIDUsageDescription": "Unlock your TamilTrade business account."
+        "NSFaceIDUsageDescription": "Unlock your Shri Sai Ganesh Stores business account."
       }
     },
     "android": {
       "package": "com.tamiltrade.ai",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/branding/adaptive-icon.png",
+        "backgroundColor": "#0D1518"
+      },
       "permissions": ["RECORD_AUDIO", "POST_NOTIFICATIONS"]
     },
     "plugins": [
@@ -38,7 +43,11 @@
     },
     "web": {
       "bundler": "metro",
-      "output": "single"
+      "output": "single",
+      "name": "Shri Sai Ganesh Stores",
+      "shortName": "Shri Sai Ganesh",
+      "favicon": "./assets/branding/favicon.png",
+      "themeColor": "#103A2F"
     }
   }
 }

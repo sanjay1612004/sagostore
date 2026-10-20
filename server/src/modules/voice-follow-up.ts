@@ -6,7 +6,7 @@ export type FollowUp = {
   field: string;
   question: string;
   questionTamil: string;
-  choices: { value: string; label: string }[];
+  choices: { value: string; label: string; speechLabelTamil?: string }[];
 };
 
 export async function voiceSourceOptions(
@@ -91,22 +91,31 @@ export function nextVoiceQuestion(
         "dueDate",
       ].find((key) => result.missing.includes(key));
   const options = (items: Entity[]) =>
-    items.slice(0, 10).map((item) => ({ value: item._id, label: item.name }));
+    items.slice(0, 10).map((item) => {
+      const tamilName = [item.name, ...(item.aliases ?? [])].find((name) =>
+        /\p{Script=Tamil}/u.test(name),
+      );
+      return {
+        value: item._id,
+        label: item.name,
+        ...(tamilName ? { speechLabelTamil: tamilName } : {}),
+      };
+    });
   const questions: Record<string, [string, string]> = {
     contactId: [
       supplier ? "Which supplier is this for?" : "Which customer is this for?",
       supplier
-        ? "எந்த சப்ளையருக்கான கணக்கு?"
-        : "எந்த வாடிக்கையாளருக்கான கணக்கு?",
+        ? "பொருளை வழங்கியவர் யார்? பெயரைச் சொல்லுங்கள்."
+        : "எந்த வாடிக்கையாளர்? பெயரைச் சொல்லுங்கள்.",
     ],
     productId: [
       "Which product? Say its saved name.",
       "எந்தப் பொருள்? சேமித்துள்ள பெயரைச் சொல்லுங்கள்.",
     ],
-    quantity: ["How many units or bags?", "எத்தனை மூட்டைகள் அல்லது யூனிட்கள்?"],
+    quantity: ["How many units or bags?", "எத்தனை மூட்டைகள் அல்லது பொருட்கள்?"],
     unitPrice: [
       "What is the price for one unit or bag?",
-      "ஒரு மூட்டை அல்லது யூனிட்டின் விலை எவ்வளவு?",
+      "ஒரு மூட்டை அல்லது ஒரு பொருளின் விலை எவ்வளவு?",
     ],
     amount: [
       "What is the payment or expense amount?",
@@ -115,7 +124,7 @@ export function nextVoiceQuestion(
     date: ["What is the transaction date?", "பரிவர்த்தனை தேதி என்ன?"],
     dueDate: [
       "What is the due date? It must be on or after the transaction date.",
-      "தவணை தேதி என்ன? அது பரிவர்த்தனை தேதிக்குப் பிறகு இருக்க வேண்டும்.",
+      "பணம் செலுத்த வேண்டிய தேதி என்ன? அது பரிவர்த்தனைத் தேதி அல்லது அதற்குப் பிந்தைய தேதியாக இருக்க வேண்டும்.",
     ],
     sourceId: [
       input.kind === "sale"

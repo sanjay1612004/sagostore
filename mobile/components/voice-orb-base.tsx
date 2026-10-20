@@ -56,24 +56,23 @@ export function VoiceMicrophoneButton({
         <Svg width={size} height={size} viewBox="0 0 260 260">
           <Defs>
             <RadialGradient id="voiceBlueHalo" cx="50%" cy="50%" r="50%">
-              <Stop offset="0" stopColor="#769AFF" stopOpacity={0.32} />
-              <Stop offset="1" stopColor="#769AFF" stopOpacity={0} />
+              <Stop offset="0" stopColor={c.accent} stopOpacity={0.15} />
+              <Stop offset="1" stopColor={c.accent} stopOpacity={0} />
             </RadialGradient>
             <RadialGradient id="voiceBlueOrb" cx="32%" cy="24%" r="85%">
-              <Stop offset="0" stopColor="#B2D6FF" />
-              <Stop offset=".28" stopColor="#527AD2" />
-              <Stop offset="1" stopColor="#2F489D" />
+              <Stop offset="0" stopColor={c.accent} />
+              <Stop offset="1" stopColor={c.accent} />
             </RadialGradient>
           </Defs>
           <Circle cx={130} cy={130} r={126} fill="url(#voiceBlueHalo)" />
-          {[112, 88].map((r, i) => (
+          {[100].map((r, i) => (
             <Circle
               key={r}
               cx={130}
               cy={130}
               r={r}
               fill="none"
-              stroke="#90B2FF"
+              stroke={c.accent}
               strokeOpacity={recording ? 0.2 + i * 0.07 : 0.12}
             />
           ))}
@@ -82,8 +81,8 @@ export function VoiceMicrophoneButton({
             cy={130}
             r={65}
             fill="url(#voiceBlueOrb)"
-            stroke="#DAE7FF"
-            strokeOpacity={0.45}
+            stroke={c.accent}
+            strokeOpacity={0.2}
           />
         </Svg>
         <Pressable
@@ -107,9 +106,17 @@ export function VoiceMicrophoneButton({
           })}
         >
           {recording ? (
-            <Square size={compact ? 20 : 31} color="#FFFFFF" fill="#FFFFFF" />
+            <Square
+              size={compact ? 20 : 31}
+              color={c.accentText}
+              fill={c.accentText}
+            />
           ) : (
-            <Mic size={compact ? 27 : 39} color="#FFFFFF" strokeWidth={1.7} />
+            <Mic
+              size={compact ? 27 : 39}
+              color={c.accentText}
+              strokeWidth={1.7}
+            />
           )}
         </Pressable>
       </Animated.View>

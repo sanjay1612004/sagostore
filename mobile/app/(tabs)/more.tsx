@@ -1,5 +1,5 @@
 import React from "react";
-import { Pressable, View, useWindowDimensions } from "react-native";
+import { Pressable, View } from "react-native";
 import { router, type Href } from "expo-router";
 import {
   Package,
@@ -15,20 +15,13 @@ import {
   ChevronRight,
   Tag,
 } from "lucide-react-native";
-import { Screen, T, Row } from "../../components/ui";
+import { Screen, T, Row, Card } from "../../components/ui";
 import { useTheme } from "../../theme";
 import { hasPermission, useSession } from "../../store/session";
+import { STORE_NAME } from "../../config/brand";
 export default function More() {
   const c = useTheme(),
     owner = useSession((s) => s.user?.role === "owner");
-  const { width } = useWindowDimensions();
-  const tones = [
-    { color: c.blue, background: c.blueSoft },
-    { color: c.violet, background: c.violetSoft },
-    { color: c.success, background: c.successSoft },
-    { color: c.warning, background: c.warningSoft },
-    { color: c.danger, background: c.dangerSoft },
-  ];
   const items = [
     {
       label: "Suppliers",
@@ -102,60 +95,75 @@ export default function More() {
     },
     {
       label: "Appearance & language",
-      detail: "Make TamilTrade yours",
+      detail: "Theme and language preferences",
       path: "/settings",
       icon: Settings,
       show: true,
     },
   ];
   return (
-    <Screen
-      title="Your business toolkit"
-      subtitle="Everything you need to keep moving."
-    >
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
-        {items
-          .filter((i) => i.show)
-          .map((item, i) => (
-            <Pressable
-              key={item.path}
-              accessibilityRole="button"
-              accessibilityLabel={item.label}
-              onPress={() => router.push(item.path as Href)}
-              style={{
-                flexBasis: width >= 750 ? "45%" : "100%",
-                flexGrow: 1,
-                padding: 18,
-                borderBottomWidth: 1,
-                borderWidth: 1,
-                borderColor: c.border,
-                borderRadius: 20,
-                backgroundColor: c.surface,
-              }}
-            >
-              <Row>
-                <View
-                  style={{
-                    backgroundColor: tones[i % tones.length]!.background,
-                    padding: 11,
-                    borderRadius: 13,
-                  }}
+    <Screen title="More" subtitle="Your business tools, in one place.">
+      {[
+        {
+          title: "Business",
+          paths: ["/suppliers", "/inventory", "/payments", "/invoices"],
+        },
+        { title: "Insights", paths: ["/reports", "/reminders", "/prices"] },
+        {
+          title: "Manage",
+          paths: ["/profile", "/staff", "/security", "/settings"],
+        },
+      ].map((group) => (
+        <View key={group.title} style={{ gap: 10 }}>
+          <T size={13} weight="medium" color={c.muted}>
+            {group.title}
+          </T>
+          <Card style={{ paddingVertical: 0, gap: 0 }}>
+            {items
+              .filter((item) => item.show && group.paths.includes(item.path))
+              .sort(
+                (a, b) =>
+                  group.paths.indexOf(a.path) - group.paths.indexOf(b.path),
+              )
+              .map((item, i) => (
+                <Pressable
+                  key={item.path}
+                  accessibilityRole="button"
+                  accessibilityLabel={item.label}
+                  onPress={() => router.push(item.path as Href)}
+                  style={({ pressed }) => ({
+                    paddingVertical: 16,
+                    minHeight: 70,
+                    borderTopWidth: i ? 1 : 0,
+                    borderColor: c.border,
+                    opacity: pressed ? 0.65 : 1,
+                  })}
                 >
-                  <item.icon color={tones[i % tones.length]!.color} size={21} />
-                </View>
-                <View style={{ flex: 1, gap: 2 }}>
-                  <T weight="medium">{item.label}</T>
-                  <T size={11} color={c.muted}>
-                    {item.detail}
-                  </T>
-                </View>
-                <ChevronRight size={18} color={c.muted} />
-              </Row>
-            </Pressable>
-          ))}
-      </View>
+                  <Row>
+                    <View
+                      style={{
+                        backgroundColor: c.elevated,
+                        padding: 9,
+                        borderRadius: 11,
+                      }}
+                    >
+                      <item.icon color={c.accent} size={19} />
+                    </View>
+                    <View style={{ flex: 1, gap: 2 }}>
+                      <T weight="medium">{item.label}</T>
+                      <T size={11} color={c.muted}>
+                        {item.detail}
+                      </T>
+                    </View>
+                    <ChevronRight size={18} color={c.muted} />
+                  </Row>
+                </Pressable>
+              ))}
+          </Card>
+        </View>
+      ))}
       <T size={11} color={c.muted} style={{ textAlign: "center" }}>
-        TAMILTRADE AI · SPEAK NATURALLY. TRADE SMARTER.
+        {STORE_NAME} · Your everyday business assistant
       </T>
     </Screen>
   );

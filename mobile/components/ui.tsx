@@ -38,6 +38,8 @@ import { rupees, type TradeRecord } from "@tamiltrade/shared";
 import { useTheme } from "../theme";
 import { AppModal as Modal } from "./app-modal";
 import { AssistantBackground } from "./assistant-background";
+import { StoreIcon } from "./store-icon";
+import { STORE_NAME } from "../config/brand";
 export function T({
   children,
   size = 14,
@@ -97,13 +99,9 @@ export function Card({
           backgroundColor: c.surface,
           borderColor: c.border,
           borderWidth: 1,
-          borderRadius: 22,
-          padding: 20,
-          gap: 10,
-          shadowColor: c.shadow,
-          shadowOffset: { width: 0, height: 4 },
-          shadowOpacity: 0.04,
-          shadowRadius: 16,
+          borderRadius: 18,
+          padding: 18,
+          gap: 12,
         },
         style,
       ]}
@@ -171,8 +169,8 @@ export function Button({
         minHeight: 52,
         paddingHorizontal: 18,
         paddingVertical: 14,
-        borderRadius: 16,
-        backgroundColor: variant === "primary" ? c.accent : c.elevated,
+        borderRadius: 13,
+        backgroundColor: variant === "primary" ? c.accent : "transparent",
         borderWidth: variant === "primary" ? 0 : 1,
         borderColor: variant === "danger" ? c.danger : c.border,
         opacity: busy || disabled ? 0.6 : pressed ? 0.8 : 1,
@@ -184,10 +182,28 @@ export function Button({
       })}
     >
       {busy ? <ActivityIndicator color={foreground} /> : icon}
-      <T weight="bold" color={foreground}>
+      <T weight="medium" color={foreground}>
         {busy ? "Please wait…" : title}
       </T>
     </Pressable>
+  );
+}
+export function AppBrand() {
+  return (
+    <View
+      style={{
+        flex: 1,
+        minWidth: 0,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 10,
+      }}
+    >
+      <StoreIcon />
+      <T size={15} weight="bold" style={{ flexShrink: 1, lineHeight: 20 }}>
+        {STORE_NAME}
+      </T>
+    </View>
   );
 }
 export function Screen({
@@ -228,7 +244,7 @@ export function Screen({
           contentContainerStyle={{
             padding: width < 360 ? 16 : width < 600 ? 20 : 32,
             paddingBottom: 40,
-            gap: variant === "assistant" ? 14 : 24,
+            gap: 20,
             ...(variant === "assistant" ? { paddingTop: 18 } : {}),
             width: "100%",
             maxWidth,
@@ -244,7 +260,7 @@ export function Screen({
             ) : undefined
           }
         >
-          <Row>
+          <Row style={{ gap: 12 }}>
             {back ? (
               <Pressable
                 accessibilityRole="button"
@@ -259,22 +275,7 @@ export function Screen({
                 <ArrowLeft color={c.text} />
               </Pressable>
             ) : (
-              <LinearGradient
-                colors={["#7863E9", "#526BE4"]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={{
-                  width: 42,
-                  height: 42,
-                  borderRadius: 14,
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                <T color="#FFFFFF" size={23} weight="bold">
-                  t
-                </T>
-              </LinearGradient>
+              <AppBrand />
             )}
             {action ?? (
               <T
@@ -283,7 +284,7 @@ export function Screen({
                 weight="bold"
                 style={{ letterSpacing: 1.6 }}
               >
-                TAMILTRADE AI
+                WORKSPACE
               </T>
             )}
           </Row>
@@ -294,8 +295,8 @@ export function Screen({
             }}
           >
             <T
-              size={width < 600 ? 27 : 32}
-              weight={variant === "assistant" ? "medium" : "bold"}
+              size={width < 600 ? 25 : 30}
+              weight="bold"
               accessibilityRole="header"
               style={{
                 letterSpacing: -0.7,
@@ -307,6 +308,7 @@ export function Screen({
             {!!subtitle && (
               <T
                 color={c.muted}
+                size={13}
                 style={{
                   textAlign: variant === "assistant" ? "center" : undefined,
                 }}
@@ -340,7 +342,7 @@ export function Field({
         style={[
           {
             minHeight: 52,
-            backgroundColor: c.elevated,
+            backgroundColor: c.bg,
             borderWidth: 1,
             borderColor: error ? c.danger : c.border,
             borderRadius: 14,
@@ -505,19 +507,20 @@ export function PremiumBalanceCard({
   caption: string;
 }) {
   const { width } = useWindowDimensions();
+  const c = useTheme();
   return (
     <LinearGradient
-      colors={["#7260DD", "#5869D9", "#415FC5"]}
+      colors={["#164C3B", "#123E32", "#15362F"]}
       start={{ x: 0, y: 0 }}
       end={{ x: 1, y: 1 }}
       style={{
         padding: width < 600 ? 24 : 30,
-        borderRadius: 26,
+        borderRadius: 18,
         borderWidth: 1,
-        borderColor: "#8E80EB",
+        borderColor: c.border,
         gap: 15,
         overflow: "hidden",
-        minHeight: 220,
+        minHeight: 180,
         justifyContent: "space-between",
       }}
     >
@@ -639,9 +642,11 @@ export function FinancialMetricCard({
 export function TransactionRow({
   item,
   onPress,
+  compact = false,
 }: {
   item: TradeRecord;
   onPress?: () => void;
+  compact?: boolean;
 }) {
   const c = useTheme();
   const income = item.kind === "sale" || item.kind === "customer_payment";
@@ -666,12 +671,13 @@ export function TransactionRow({
       }
       style={({ pressed }) => ({
         paddingVertical: 14,
-        paddingHorizontal: 14,
-        borderWidth: 1,
+        paddingHorizontal: compact ? 0 : 14,
+        borderWidth: compact ? 0 : 1,
+        borderBottomWidth: 1,
         borderColor: c.border,
         backgroundColor: c.surface,
-        borderRadius: 18,
-        marginBottom: 10,
+        borderRadius: compact ? 0 : 16,
+        marginBottom: compact ? 0 : 10,
         opacity: pressed ? 0.65 : 1,
       })}
     >
@@ -880,6 +886,7 @@ export function ConfirmationSheet({
 }) {
   const c = useTheme();
   const reduced = useReducedMotion();
+  const { width } = useWindowDimensions();
   return (
     <Modal
       accessibilityLabel="Review and confirm transaction"
@@ -892,15 +899,20 @@ export function ConfirmationSheet({
         style={{
           flex: 1,
           backgroundColor: "#0009",
-          justifyContent: "flex-end",
+          justifyContent: width >= 760 ? "center" : "flex-end",
         }}
       >
         <View
           style={{
             maxHeight: "90%",
+            width: "100%",
+            maxWidth: 680,
+            alignSelf: "center",
             backgroundColor: c.bg,
             borderTopLeftRadius: 30,
             borderTopRightRadius: 30,
+            borderBottomLeftRadius: width >= 760 ? 24 : 0,
+            borderBottomRightRadius: width >= 760 ? 24 : 0,
             padding: 24,
             gap: 20,
             paddingBottom: 40,

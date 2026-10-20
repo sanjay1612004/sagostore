@@ -35,7 +35,6 @@ import {
   History,
   Keyboard,
   ArrowUp,
-  ShoppingBag,
   Wallet,
   Package,
 } from "lucide-react-native";
@@ -48,6 +47,7 @@ import {
   invalidateBusiness,
 } from "../../services/api";
 import {
+  followUpSpeechText,
   speakVoicePrompt,
   stopVoicePrompt,
 } from "../../services/voice-prompts";
@@ -71,12 +71,17 @@ type Result = {
   clarification: string[];
   candidates: { _id: string; name: string }[];
   canPreview: boolean;
+  understanding?: {
+    provider: "groq" | "gemini";
+    model?: string;
+    fallback?: boolean;
+  };
   followUp?: {
     id: string;
     field: string;
     question: string;
     questionTamil: string;
-    choices: { value: string; label: string }[];
+    choices: { value: string; label: string; speechLabelTamil?: string }[];
   };
   summary?: {
     contactName?: string;
@@ -135,7 +140,17 @@ type SpeechSettings = {
   ready: boolean;
   label: string;
   maxDurationSeconds: number;
-  understanding: { provider: "groq"; model: string; ready: boolean };
+  understanding: {
+    provider: "groq";
+    model: string;
+    ready: boolean;
+    fallback?: {
+      provider: "gemini";
+      model: string;
+      enabled: boolean;
+      ready: boolean;
+    };
+  };
   worker?: { online: boolean; lastSeenAt: string | null };
 };
 const states = {
@@ -178,6 +193,7 @@ export default function Voice() {
   const shownTranscriptJob = useRef<string | null>(null);
   const [focused, setFocused] = useState(false);
   const [composerFocused, setComposerFocused] = useState(false);
+  const [voicePromptUnavailable, setVoicePromptUnavailable] = useState(false);
   const [retryUntil, setRetryUntil] = useState(0);
   const [retryClock, setRetryClock] = useState(Date.now());
   useEffect(() => {
@@ -203,16 +219,11 @@ export default function Voice() {
   const speakQuestion = () => {
     const question = result?.followUp;
     if (!question) return;
-    const choices = question.choices
-      .slice(0, 5)
-      .map(
-        (choice, index) =>
-          `${question.field === "sourceId" ? choice.value : index + 1}. ${choice.label}`,
-      )
-      .join(". ");
+    setVoicePromptUnavailable(false);
     void speakVoicePrompt(
-      `${language === "ta" ? question.questionTamil : question.question}${choices ? ` ${choices}` : ""}`,
+      followUpSpeechText(question, language),
       language,
+      () => setVoicePromptUnavailable(true),
     );
   };
   useEffect(() => {
@@ -529,10 +540,13 @@ export default function Voice() {
     <Screen
       maxWidth={860}
       variant="assistant"
-      title={copy("Let’s talk business.", "என்ன கணக்கு பார்க்கலாம்?")}
+      title={copy(
+        "Your voice. Your business.",
+        "உங்கள் குரலில், உங்கள் கணக்கு.",
+      )}
       subtitle={copy(
-        "Speak naturally, or type a business command.",
-        "இயல்பா பேசுங்க அல்லது கட்டளையை எழுதுங்க.",
+        "Speak or type. I'll ask for anything missing.",
+        "பேசுங்கள் அல்லது எழுதுங்கள். மீதி விவரங்களைக் கேட்கிறேன்.",
       )}
       action={
         <Pressable
@@ -545,7 +559,7 @@ export default function Voice() {
             gap: 7,
             paddingHorizontal: 14,
             paddingVertical: 10,
-            borderRadius: 24,
+            borderRadius: 12,
             borderWidth: 1,
             borderColor: c.border,
             backgroundColor: c.surface,
@@ -587,6 +601,11 @@ export default function Voice() {
                   ? "Speech processing is busy · your recording is queued"
                   : states[state]}
         </T>
+        {result?.understanding?.fallback && state === "completed" && (
+          <T size={12} color={c.muted} accessibilityLiveRegion="polite">
+            Understood with Gemini · primary AI usage limit reached
+          </T>
+        )}
         {audio.isRecording && (
           <T size={12} color={c.muted}>
             {Math.floor(audio.durationMillis / 1000)} / {maxDurationSeconds}{" "}
@@ -654,29 +673,96 @@ export default function Voice() {
           <T size={19} weight="medium" accessibilityLiveRegion="polite">
             {copy(result.followUp.question, result.followUp.questionTamil)}
           </T>
-          {result.followUp.choices.map((choice, index) => (
-            <T key={choice.value} color={c.muted}>
-              {result.followUp?.field === "sourceId" ? choice.value : index + 1}
-              . {choice.label}
+          {voicePromptUnavailable && (
+            <T size={12} color={c.muted} accessibilityLiveRegion="polite">
+              Voice playback is unavailable. For Tamil, enable or download a
+              Tamil voice in your device’s text-to-speech settings, then tap
+              Repeat question. You can still reply below.
             </T>
+          )}
+          {(result.summary?.contactName || result.input.quantity) && (
+            <T color={c.muted} size={12}>
+              {[
+                result.summary?.contactName,
+                result.summary?.productName,
+                result.input.quantity
+                  ? `${result.input.quantity} units`
+                  : undefined,
+                result.input.unitPrice
+                  ? `₹${result.input.unitPrice}/unit`
+                  : undefined,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </T>
+          )}
+          {result.followUp.choices.map((choice, index) => (
+            <Pressable
+              key={choice.value}
+              accessibilityRole="button"
+              accessibilityLabel={`Choose ${choice.label}`}
+              disabled={processing || coolingDown || audio.isRecording}
+              onPress={() =>
+                void understand(
+                  result.followUp?.field === "sourceId"
+                    ? `option ${choice.value}`
+                    : choice.label,
+                )
+              }
+              style={({ pressed }) => ({
+                padding: 12,
+                minHeight: 44,
+                borderRadius: 12,
+                borderWidth: 1,
+                borderColor: c.border,
+                backgroundColor: pressed ? c.soft : c.bg,
+                opacity:
+                  processing || coolingDown || audio.isRecording ? 0.5 : 1,
+              })}
+            >
+              <T size={13}>
+                {result.followUp?.field === "sourceId"
+                  ? choice.value
+                  : index + 1}
+                . {choice.label}
+              </T>
+            </Pressable>
           ))}
           <Button
             title={audio.isRecording ? "Finish reply" : "Reply by voice"}
             disabled={processing || coolingDown}
             onPress={() => void record()}
           />
-          <Button
-            title="Hear the question again"
-            variant="secondary"
-            disabled={processing || audio.isRecording}
-            onPress={speakQuestion}
-          />
+          <Row style={{ flexWrap: "wrap", justifyContent: "center" }}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Hear the question again"
+              disabled={processing || audio.isRecording}
+              onPress={speakQuestion}
+              style={{ minHeight: 44, justifyContent: "center" }}
+            >
+              <T size={12} color={c.muted}>
+                Repeat question
+              </T>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Start over"
+              disabled={processing || audio.isRecording}
+              onPress={() => void startOver()}
+              style={{ minHeight: 44, justifyContent: "center" }}
+            >
+              <T size={12} color={c.muted}>
+                Start over
+              </T>
+            </Pressable>
+          </Row>
         </Card>
       )}
       <View style={{ gap: 10 }}>
         <View
           style={{
-            borderRadius: 28,
+            borderRadius: 20,
             borderWidth: 1,
             borderColor: composerFocused ? c.accent : c.border,
             backgroundColor: c.surface,
@@ -700,7 +786,7 @@ export default function Voice() {
             placeholder={
               result?.followUp
                 ? "Speak or type your reply…"
-                : "Ask about your business…"
+                : "e.g. Sold 10 bags to Kishore at ₹3,000 each"
             }
             placeholderTextColor={c.muted}
             style={{
@@ -777,11 +863,10 @@ export default function Voice() {
           </Row>
         </View>
         <T size={11} color={c.muted} style={{ textAlign: "center" }}>
-          Review names and amounts before confirming. Every financial action
-          needs your approval.
+          Nothing is saved until you review and confirm.
         </T>
       </View>
-      {result && (
+      {result && !result.followUp && (
         <Card>
           <Row>
             <Sparkles color={c.accent} size={18} />
@@ -846,22 +931,36 @@ export default function Voice() {
                 />
               )}
               {!draft && <ErrorNotice error={reviewError} />}
-              <Button
-                title="Edit manually"
-                variant="secondary"
-                disabled={processing || audio.isRecording}
-                onPress={() => {
-                  void stopVoicePrompt();
-                  useComposer.getState().set(result.input);
-                  router.push("/trade");
-                }}
-              />
-              <Button
-                title="Start over"
-                variant="secondary"
-                disabled={processing || audio.isRecording}
-                onPress={() => void startOver()}
-              />
+              <Row
+                style={{ justifyContent: "center", flexWrap: "wrap", gap: 24 }}
+              >
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Edit manually"
+                  disabled={processing || audio.isRecording}
+                  onPress={() => {
+                    void stopVoicePrompt();
+                    useComposer.getState().set(result.input);
+                    router.push("/trade");
+                  }}
+                  style={{ minHeight: 44, justifyContent: "center" }}
+                >
+                  <T size={13} color={c.muted}>
+                    Edit details
+                  </T>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Start over"
+                  disabled={processing || audio.isRecording}
+                  onPress={() => void startOver()}
+                  style={{ minHeight: 44, justifyContent: "center" }}
+                >
+                  <T size={13} color={c.muted}>
+                    Start over
+                  </T>
+                </Pressable>
+              </Row>
             </>
           )}
           {answer &&
@@ -1004,73 +1103,67 @@ export default function Voice() {
           />
         </Card>
       )}
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
-        {[
-          {
-            title: "Record a purchase",
-            hint: "Add stock from your supplier",
-            icon: ShoppingBag,
-            command:
-              "இன்னைக்கு ABC மில்லுல இருந்து 50 மூட்டை ஜவ்வரிசி வாங்கினேன். ஒரு மூட்டை 3200 ரூபாய். லாரி வாடகை 2500.",
-          },
-          {
-            title: "Check a balance",
-            hint: "See what is still due",
-            icon: Wallet,
-            command: "ரமேஷ் பாக்கி எவ்வளவு?",
-          },
-          {
-            title: "View stock",
-            hint: "Know what is available",
-            icon: Package,
-            command: "ஸ்டாக் எவ்வளவு இருக்கு?",
-          },
-        ].map((suggestion) => (
-          <Pressable
-            key={suggestion.title}
-            accessibilityRole="button"
-            accessibilityLabel={suggestion.title}
-            disabled={processing || audio.isRecording}
-            onPress={() => {
-              setText(suggestion.command);
-              setResult(null);
-            }}
-            style={({ pressed }) => ({
-              flexBasis: width >= 600 ? "30%" : "100%",
-              flexGrow: 1,
-              minWidth: 0,
-              padding: 16,
-              borderRadius: 20,
-              borderWidth: 1,
-              borderColor: c.border,
-              backgroundColor: c.surface,
-              opacity:
-                processing || audio.isRecording ? 0.5 : pressed ? 0.7 : 1,
-              gap: 10,
-            })}
-          >
-            <suggestion.icon size={19} color={c.blue} />
-            <View style={{ gap: 3 }}>
-              <T size={13} weight="medium">
-                {suggestion.title}
-              </T>
-              <T size={11} color={c.muted}>
-                {suggestion.hint}
-              </T>
-            </View>
-          </Pressable>
-        ))}
-      </View>
-      <T size={11} color={c.muted} style={{ textAlign: "center" }}>
-        Powered by Groq Qwen · Commands and relevant account/product names are
-        sent to the configured model provider for understanding. Free-plan
-        limits apply.
-        {speech.data?.provider === "sarvam"
-          ? " Recordings are transcribed by Sarvam."
-          : speech.data?.provider === "whisper"
-            ? " Recordings use your local speech engine."
-            : ""}
-      </T>
+      {!result && !text && !processing && !audio.isRecording && (
+        <View
+          style={{
+            flexDirection: "row",
+            flexWrap: "wrap",
+            justifyContent: "center",
+            gap: 10,
+          }}
+        >
+          {[
+            {
+              title: "Today's sales",
+              hint: "",
+              icon: Wallet,
+              command: "How much sales has happened today?",
+            },
+            {
+              title: "Check stock",
+              hint: "",
+              icon: Package,
+              command: "ஸ்டாக் எவ்வளவு இருக்கு?",
+            },
+          ].map((suggestion) => (
+            <Pressable
+              key={suggestion.title}
+              accessibilityRole="button"
+              accessibilityLabel={suggestion.title}
+              disabled={processing || coolingDown || audio.isRecording}
+              onPress={() => {
+                void understand(suggestion.command);
+              }}
+              style={({ pressed }) => ({
+                minWidth: 0,
+                minHeight: 44,
+                paddingVertical: 10,
+                paddingHorizontal: 14,
+                flexDirection: "row",
+                alignItems: "center",
+                borderRadius: 13,
+                borderWidth: 1,
+                borderColor: c.border,
+                backgroundColor: c.surface,
+                opacity:
+                  processing || coolingDown || audio.isRecording
+                    ? 0.5
+                    : pressed
+                      ? 0.7
+                      : 1,
+                gap: 10,
+              })}
+            >
+              <suggestion.icon size={16} color={c.muted} />
+              <View style={{ gap: 3 }}>
+                <T size={13} weight="medium">
+                  {suggestion.title}
+                </T>
+              </View>
+            </Pressable>
+          ))}
+        </View>
+      )}
       <ConfirmationSheet
         visible={!!draft}
         onClose={() => {
@@ -1101,24 +1194,33 @@ export default function Voice() {
                     {draft.input.unitPrice}
                   </T>
                   <T>Delivery: {draft.input.delivery}</T>
-                  <T>
-                    Extra costs: ₹
-                    {[
-                      draft.input.transport,
-                      draft.input.loading,
-                      draft.input.unloading,
-                      draft.input.otherCosts,
-                    ]
-                      .reduce((sum, value) => sum + Number(value), 0)
-                      .toFixed(2)}
-                  </T>
-                  <T>Discount: ₹{draft.input.discount}</T>
+                  {[
+                    draft.input.transport,
+                    draft.input.loading,
+                    draft.input.unloading,
+                    draft.input.otherCosts,
+                  ].some((value) => Number(value) > 0) && (
+                    <T>
+                      Extra costs: ₹
+                      {[
+                        draft.input.transport,
+                        draft.input.loading,
+                        draft.input.unloading,
+                        draft.input.otherCosts,
+                      ]
+                        .reduce((sum, value) => sum + Number(value), 0)
+                        .toFixed(2)}
+                    </T>
+                  )}
+                  {Number(draft.input.discount) > 0 && (
+                    <T>Discount: ₹{draft.input.discount}</T>
+                  )}
                 </>
               )}
               {result?.summary?.sourceLabel && (
                 <T>Applied to: {result.summary.sourceLabel}</T>
               )}
-              {!!draft.input.sourceId && (
+              {!!draft.input.sourceId && !result?.summary?.sourceLabel && (
                 <T size={12} color={c.muted}>
                   Source transaction: {draft.input.sourceId}
                 </T>
@@ -1127,7 +1229,7 @@ export default function Voice() {
                 draft.input.kind === "supplier_payment") && (
                 <T>Payment method: {draft.input.method.toUpperCase()}</T>
               )}
-              <T>Tax: {rupees(draft.totals.tax)}</T>
+              {draft.totals.tax > 0 && <T>Tax: {rupees(draft.totals.tax)}</T>}
               <T size={23} color={c.accent} weight="bold">
                 Total: {rupees(draft.totals.total)}
               </T>

@@ -129,6 +129,13 @@ export async function understand(
       apiKey: env.GROQ_API_KEY,
       model: env.COMMAND_AI_MODEL,
       timeoutMs: env.COMMAND_AI_TIMEOUT_MS,
+      gemini:
+        env.GEMINI_FALLBACK_ENABLED && env.GEMINI_API_KEY
+          ? {
+              apiKey: env.GEMINI_API_KEY,
+              model: env.GEMINI_COMMAND_AI_MODEL,
+            }
+          : undefined,
     },
   );
   if (selection.contactId) {
@@ -456,6 +463,12 @@ voiceRouter.get("/config", async (_req, res) => {
       provider: "groq",
       model: env.COMMAND_AI_MODEL,
       ready: Boolean(env.GROQ_API_KEY),
+      fallback: {
+        provider: "gemini",
+        model: env.GEMINI_COMMAND_AI_MODEL,
+        enabled: env.GEMINI_FALLBACK_ENABLED,
+        ready: env.GEMINI_FALLBACK_ENABLED && Boolean(env.GEMINI_API_KEY),
+      },
     },
     worker: await voiceWorkerStatus(),
   });

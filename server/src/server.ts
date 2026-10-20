@@ -8,7 +8,7 @@ async function main() {
   const server = app.listen(env.PORT, env.API_HOST, () =>
     logger.info(
       { host: env.API_HOST, port: env.PORT },
-      "TamilTrade API listening",
+      "Shri Sai Ganesh Stores API listening",
     ),
   );
   server.on("error", () => {

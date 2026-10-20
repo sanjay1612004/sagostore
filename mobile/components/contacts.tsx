@@ -16,6 +16,7 @@ import {
   ErrorNotice,
   EmptyState,
   LoadingSkeleton,
+  AppBrand,
 } from "./ui";
 import { useTheme } from "../theme";
 export function ContactsScreen({
@@ -49,7 +50,7 @@ export function ContactsScreen({
       style={{ flex: 1, backgroundColor: c.bg }}
     >
       <FlatList
-        style={{ width: "100%", maxWidth: 1160, alignSelf: "center" }}
+        style={{ width: "100%", maxWidth: 1040, alignSelf: "center" }}
         contentContainerStyle={{
           padding: width < 600 ? 20 : 32,
           paddingBottom: 40,
@@ -72,16 +73,14 @@ export function ContactsScreen({
                 onPress={() => router.back()}
               />
             )}
-            <T size={11} color={c.accent} weight="bold">
-              BUSINESS RELATIONSHIPS
-            </T>
-            <T size={30} weight="bold">
+            {!back && <AppBrand />}
+            <T size={25} weight="bold">
               {kind === "customer" ? "Customers" : "Suppliers"}
             </T>
-            <T color={c.muted}>
+            <T color={c.muted} size={13}>
               {kind === "customer"
-                ? "Good relationships. Clear balances."
-                : "Your mills, merchants and purchase partners."}
+                ? "Accounts, balances and payment history."
+                : "Purchase partners and outstanding balances."}
             </T>
             <Field
               label={`Search ${kind}s`}
@@ -128,8 +127,7 @@ export function ContactsScreen({
           >
             <Card
               style={{
-                borderLeftWidth: 3,
-                borderLeftColor: kind === "customer" ? c.blue : c.violet,
+                padding: 16,
               }}
             >
               <Row>
@@ -138,16 +136,12 @@ export function ContactsScreen({
                     width: 43,
                     height: 43,
                     borderRadius: 14,
-                    backgroundColor:
-                      kind === "customer" ? c.blueSoft : c.violetSoft,
+                    backgroundColor: c.soft,
                     alignItems: "center",
                     justifyContent: "center",
                   }}
                 >
-                  <T
-                    color={kind === "customer" ? c.blue : c.violet}
-                    weight="bold"
-                  >
+                  <T color={c.accent} weight="bold">
                     {item.name.slice(0, 2).toUpperCase()}
                   </T>
                 </View>

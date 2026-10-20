@@ -14,6 +14,7 @@ import {
 } from "../components/ui";
 import { api } from "../services/api";
 import { useTheme } from "../theme";
+import { STORE_NAME } from "../config/brand";
 type Reminder = {
   _id: string;
   kind: "sale" | "purchase";
@@ -51,7 +52,7 @@ export default function Reminders() {
       await Notifications.scheduleNotificationAsync({
         identifier,
         content: {
-          title: "TamilTrade · Payment reminder",
+          title: `${STORE_NAME} · Payment reminder`,
           body: `${r.contactName}: ${rupees(r.total - r.paid)} ${r.kind === "sale" ? "receivable" : "payable"}`,
           data: { recordId: r._id },
         },

@@ -106,7 +106,7 @@ export default function ContactDetails() {
                         })
                       }
                     />
-                  )}{" "}
+                  )}
                   {hasPermission(
                     r.kind === "customer" ? "sales" : "purchases",
                   ) && (

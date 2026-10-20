@@ -19,6 +19,7 @@ import {
 import { post } from "../../services/api";
 import { useSession, type Credentials } from "../../store/session";
 import { useTheme } from "../../theme";
+import { STORE_NAME } from "../../config/brand";
 export default function Login() {
   const c = useTheme();
   const [visible, setVisible] = useState(false),
@@ -46,7 +47,7 @@ export default function Login() {
   return (
     <Screen
       maxWidth={540}
-      title="Welcome to TamilTrade."
+      title={`Welcome to ${STORE_NAME}.`}
       subtitle="Speak naturally. Run your business smarter."
     >
       <LinearGradient

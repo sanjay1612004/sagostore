@@ -14,6 +14,7 @@ import { usePreferences } from "../store/preferences";
 import { useSession } from "../store/session";
 import { useTheme } from "../theme";
 import { logout } from "../services/api";
+import { STORE_NAME } from "../config/brand";
 export default function Settings() {
   const c = useTheme(),
     prefs = usePreferences(),
@@ -31,7 +32,7 @@ export default function Settings() {
             "Set up fingerprint or face unlock in your device settings first.",
           );
         const auth = await LocalAuthentication.authenticateAsync({
-          promptMessage: "Enable TamilTrade app lock",
+          promptMessage: `Enable ${STORE_NAME} app lock`,
         });
         if (!auth.success) return;
       }
@@ -42,8 +43,8 @@ export default function Settings() {
   };
   return (
     <Screen
-      title="Make it yours"
-      subtitle="A little more personal. Just as secure."
+      title="Settings"
+      subtitle="Appearance, language and account security."
       back
     >
       <Card>
@@ -54,8 +55,8 @@ export default function Settings() {
             void prefs.set({ theme: v as "dark" | "light" }).catch(setError);
           }}
           options={[
-            { value: "dark", label: "Charcoal blue" },
-            { value: "light", label: "Fresh light" },
+            { value: "dark", label: "Charcoal & emerald" },
+            { value: "light", label: "Light & emerald" },
           ]}
         />
         <Select

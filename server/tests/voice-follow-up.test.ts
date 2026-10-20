@@ -56,4 +56,27 @@ describe("voice questions", () => {
       ),
     ).toBeUndefined();
   });
+  it("uses a saved Tamil alias for pronunciation without changing the saved account choice", () => {
+    const account = nextVoiceQuestion(
+      result,
+      {
+        ...catalog,
+        suppliers: [
+          {
+            _id: "b".repeat(24),
+            name: "ABC Mill",
+            aliases: ["ABC", "ஏ பி சி மில்"],
+          },
+        ],
+      },
+      [],
+    );
+    expect(account?.choices).toEqual([
+      {
+        value: "b".repeat(24),
+        label: "ABC Mill",
+        speechLabelTamil: "ஏ பி சி மில்",
+      },
+    ]);
+  });
 });

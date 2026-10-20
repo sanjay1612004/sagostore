@@ -12,7 +12,7 @@ function BottomBar({ state, emitter, navigateToTab }: BottomTabBarProps) {
   const c = useTheme(),
     insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
-  const names = ["Home", "Activity", "Voice AI", "Customers", "More"];
+  const names = ["Home", "Activity", "Voice", "Customers", "More"];
   return (
     <View
       style={{
@@ -20,8 +20,8 @@ function BottomBar({ state, emitter, navigateToTab }: BottomTabBarProps) {
         backgroundColor: c.surface,
         borderTopWidth: 1,
         borderColor: c.border,
-        paddingTop: 10,
-        paddingBottom: Math.max(insets.bottom, 10),
+        paddingTop: 6,
+        paddingBottom: Math.max(insets.bottom, 8),
         paddingHorizontal: width > 1160 ? (width - 1100) / 2 : 8,
         shadowColor: c.shadow,
         shadowOffset: { width: 0, height: -4 },
@@ -60,21 +60,20 @@ function BottomBar({ state, emitter, navigateToTab }: BottomTabBarProps) {
           >
             <View
               style={{
-                padding: voice ? 14 : 8,
-                paddingHorizontal: voice ? 15 : 18,
-                borderRadius: voice ? 21 : 14,
+                width: 48,
+                height: 35,
+                alignItems: "center",
+                justifyContent: "center",
+                borderRadius: 12,
                 backgroundColor: voice
                   ? c.accent
                   : active
                     ? c.soft
                     : "transparent",
-                marginTop: voice ? -22 : 0,
-                borderWidth: voice ? 5 : 0,
-                borderColor: c.bg,
               }}
             >
               <Icon
-                size={voice ? 24 : 21}
+                size={21}
                 color={voice ? c.accentText : active ? c.accent : c.muted}
               />
             </View>

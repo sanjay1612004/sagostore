@@ -22,6 +22,10 @@ import { tamilSpeechForm, tamilSpeechPrompt } from "../shared/speech.js";
 import { transcribeSarvam, SpeechRecognitionError } from "../modules/sarvam.js";
 import { speechSettings } from "../shared/speech-settings.js";
 import {
+  workerDatabaseFailure,
+  resetWorkerDatabaseConnection,
+} from "../shared/worker-database.js";
+import {
   acquireVoiceWorkerLease,
   publishVoiceWorkerHeartbeat,
 } from "../shared/voice-worker-lease.js";
@@ -141,28 +145,25 @@ async function processJob(job: mongoose.HydratedDocument<VoiceJobDoc>) {
       ],
       15000,
     );
-    let prompt = "";
-    if (env.SPEECH_ENGINE !== "sarvam") {
-      const [contacts, products] = await Promise.all([
-        Contact.find({ businessId: job.businessId })
-          .select("name aliases")
-          .sort({ updatedAt: -1 })
-          .limit(30)
-          .lean(),
-        Product.find({ businessId: job.businessId })
-          .select("name")
-          .sort({ updatedAt: -1 })
-          .limit(10)
-          .lean(),
-      ]);
-      prompt = tamilSpeechPrompt([
-        ...products.map((product) => product.name),
-        ...contacts.flatMap((contact) => [
-          contact.name,
-          ...(contact.aliases ?? []),
-        ]),
-      ]);
-    }
+    // Both cloud and local recognition need this business's saved spellings.
+    // Prioritize canonical names before aliases within the provider's hint cap.
+    const [contacts, products] = await Promise.all([
+      Contact.find({ businessId: job.businessId })
+        .select("name aliases")
+        .sort({ updatedAt: -1 })
+        .limit(30)
+        .lean(),
+      Product.find({ businessId: job.businessId })
+        .select("name")
+        .sort({ updatedAt: -1 })
+        .limit(10)
+        .lean(),
+    ]);
+    const names = [
+      ...contacts.map((contact) => contact.name),
+      ...products.map((product) => product.name),
+      ...contacts.flatMap((contact) => contact.aliases ?? []),
+    ];
     let transcript: string;
     const transcriptionStartedAt = Date.now();
     if (env.SPEECH_ENGINE === "sarvam") {
@@ -170,11 +171,12 @@ async function processJob(job: mongoose.HydratedDocument<VoiceJobDoc>) {
         apiKey: env.SARVAM_API_KEY,
         model: env.SARVAM_MODEL,
         timeoutMs: env.SPEECH_TIMEOUT_MS,
+        keyterms: names,
       });
     } else if (env.SPEECH_ENGINE === "server") {
       const form = tamilSpeechForm(
         await readFile(wav),
-        prompt,
+        tamilSpeechPrompt(names),
         env.SPEECH_BEAM_SIZE,
       );
       const response = await fetch(`${env.WHISPER_SERVER_URL}/inference`, {
@@ -197,7 +199,7 @@ async function processJob(job: mongoose.HydratedDocument<VoiceJobDoc>) {
             "-bs",
             String(env.SPEECH_BEAM_SIZE),
             "--prompt",
-            prompt,
+            tamilSpeechPrompt(names),
             "-t",
             String(env.SPEECH_THREADS),
             "-nt",
@@ -299,16 +301,30 @@ async function main() {
   const leaseOwner = randomUUID();
   await publishVoiceWorkerHeartbeat(leaseOwner);
   let publishing = false;
+  let databaseResetNeeded = false;
+  let heartbeatWork: Promise<unknown> | undefined;
   const heartbeat = setInterval(() => {
-    if (publishing) return;
+    if (
+      publishing ||
+      stopping ||
+      databaseResetNeeded ||
+      mongoose.connection.readyState !== 1
+    )
+      return;
     publishing = true;
-    void publishVoiceWorkerHeartbeat(leaseOwner)
-      .catch(() =>
+    heartbeatWork = publishVoiceWorkerHeartbeat(leaseOwner)
+      .catch((error) => {
+        const failureKind = workerDatabaseFailure(error);
+        if (failureKind !== "other") databaseResetNeeded = true;
         log.warn(
-          { code: "HEARTBEAT_FAILED" },
+          {
+            code: "HEARTBEAT_FAILED",
+            failureKind,
+            connectionState: mongoose.connection.readyState,
+          },
           "Speech worker heartbeat could not be updated",
-        ),
-      )
+        );
+      })
       .finally(() => {
         publishing = false;
       });
@@ -317,8 +333,21 @@ async function main() {
   try {
     while (!stopping) {
       try {
+        if (databaseResetNeeded) {
+          // Do not close the pool while a heartbeat is still using it.
+          await heartbeatWork;
+          await resetWorkerDatabaseConnection(mongoose.connection);
+        }
         if (mongoose.connection.readyState !== 1)
           await connectDatabase(env.MONGODB_URI, databaseOptions);
+        if (databaseResetNeeded) {
+          await publishVoiceWorkerHeartbeat(leaseOwner);
+          databaseResetNeeded = false;
+          log.info(
+            { code: "WORKER_DATABASE_RECOVERED" },
+            "Speech worker database connection restored",
+          );
+        }
         const gate = await acquireVoiceWorkerLease(
           leaseOwner,
           env.SPEECH_TIMEOUT_MS + 60000,
@@ -381,27 +410,23 @@ async function main() {
       } catch (error) {
         const failureName =
           error instanceof Error ? error.name : "UnknownError";
+        const failureKind = workerDatabaseFailure(error);
         log.error(
           {
             code: "WORKER_LOOP_FAILED",
             failureName,
+            failureKind,
+            connectionState: mongoose.connection.readyState,
           },
           "Worker will retry after database or disk failure",
         );
-        if (
-          /Network|ServerSelection|PoolCleared|WaitQueueTimeout/.test(
-            failureName,
-          )
-        ) {
-          // Drop the stale pool before retrying. Only this worker process uses
-          // this connection; the API has its own independent connection pool.
-          await mongoose.connection.close(true).catch(() => undefined);
-        }
+        if (failureKind !== "other") databaseResetNeeded = true;
         await delay(5000);
       }
     }
   } finally {
     clearInterval(heartbeat);
+    await heartbeatWork;
     await QueueState.updateOne(
       { _id: "voice", heartbeatOwner: leaseOwner },
       {

@@ -3,19 +3,18 @@ import { View, FlatList, Pressable, useWindowDimensions } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { router } from "expo-router";
-import { type TradeRecord, type TradeInput } from "@tamiltrade/shared";
+import { type TradeRecord } from "@tamiltrade/shared";
 import { api, type Page } from "../../services/api";
 import { hasPermission } from "../../store/session";
 import { useTheme } from "../../theme";
 import {
   T,
-  Row,
-  Button,
   ErrorNotice,
   EmptyState,
   LoadingSkeleton,
   TransactionRow,
   Select,
+  AppBrand,
 } from "../../components/ui";
 export default function Transactions() {
   const c = useTheme();
@@ -53,7 +52,7 @@ export default function Transactions() {
       style={{ flex: 1, backgroundColor: c.bg }}
     >
       <FlatList
-        style={{ width: "100%", maxWidth: 1160, alignSelf: "center" }}
+        style={{ width: "100%", maxWidth: 1040, alignSelf: "center" }}
         contentContainerStyle={{
           padding: width < 600 ? 20 : 32,
           paddingBottom: 40,
@@ -68,38 +67,19 @@ export default function Transactions() {
         onEndReachedThreshold={0.3}
         ListHeaderComponent={
           <View style={{ gap: 16, paddingBottom: 20 }}>
-            <T color={c.accent} size={11} weight="bold">
-              THE BUSINESS LEDGER
+            <AppBrand />
+            <T size={25} weight="bold">
+              Activity
             </T>
-            <T size={30} weight="bold">
-              Transactions
+            <T color={c.muted} size={13}>
+              Your confirmed transactions.
             </T>
-            <T color={c.muted}>Every entry. One clear picture.</T>
             <Select
               label="Filter activity"
               value={kind}
               onChange={setKind}
               options={options}
             />
-            <Row>
-              {options
-                .filter((o) => o.value !== "all")
-                .slice(0, 2)
-                .map((o) => (
-                  <View key={o.value} style={{ flex: 1 }}>
-                    <Button
-                      title={`+ ${o.label === "Purchases" ? "Purchase" : "Sale"}`}
-                      variant="secondary"
-                      onPress={() =>
-                        router.push({
-                          pathname: "/trade",
-                          params: { kind: o.value },
-                        })
-                      }
-                    />
-                  </View>
-                ))}
-            </Row>
             <Select
               label="Add a transaction"
               options={options.filter((o) => o.value !== "all")}

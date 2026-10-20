@@ -857,41 +857,51 @@ export default function Trade() {
                     {allocatedSource.date} · {allocatedSource.contactName} ·{" "}
                     {allocatedSource.productName}
                   </T>
-                  <T size={12} color={c.muted}>
-                    Transaction {allocatedSource._id}
-                  </T>
                 </View>
               )}
               {isTrade && (
                 <>
-                  <Row>
-                    <T>Extra costs</T>
-                    <T>
-                      ₹
-                      {[
-                        draft.input.transport,
-                        draft.input.loading,
-                        draft.input.unloading,
-                        draft.input.otherCosts,
-                      ]
-                        .reduce((sum, v) => sum + Number(v), 0)
-                        .toFixed(2)}
-                    </T>
-                  </Row>
-                  <Row>
-                    <T>Discount</T>
-                    <T>₹{draft.input.discount}</T>
-                  </Row>
+                  {[
+                    draft.input.transport,
+                    draft.input.loading,
+                    draft.input.unloading,
+                    draft.input.otherCosts,
+                  ].some((value) => Number(value) > 0) && (
+                    <Row>
+                      <T>Extra costs</T>
+                      <T>
+                        ₹
+                        {[
+                          draft.input.transport,
+                          draft.input.loading,
+                          draft.input.unloading,
+                          draft.input.otherCosts,
+                        ]
+                          .reduce((sum, v) => sum + Number(v), 0)
+                          .toFixed(2)}
+                      </T>
+                    </Row>
+                  )}
+                  {Number(draft.input.discount) > 0 && (
+                    <Row>
+                      <T>Discount</T>
+                      <T>₹{draft.input.discount}</T>
+                    </Row>
+                  )}
                 </>
               )}
-              <Row>
-                <T>Subtotal</T>
-                <T>{rupees(draft.totals.subtotal)}</T>
-              </Row>
-              <Row>
-                <T>Tax</T>
-                <T>{rupees(draft.totals.tax)}</T>
-              </Row>
+              {draft.totals.tax > 0 && (
+                <Row>
+                  <T>Subtotal</T>
+                  <T>{rupees(draft.totals.subtotal)}</T>
+                </Row>
+              )}
+              {draft.totals.tax > 0 && (
+                <Row>
+                  <T>Tax</T>
+                  <T>{rupees(draft.totals.tax)}</T>
+                </Row>
+              )}
               <Row>
                 <T size={18} weight="bold">
                   Total

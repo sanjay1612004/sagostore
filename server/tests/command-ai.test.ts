@@ -48,11 +48,265 @@ const envelope = (data: unknown, finishReason = "stop") =>
       },
     ],
   });
+const geminiEnvelope = (data: unknown, finishReason = "STOP") =>
+  Response.json({
+    candidates: [
+      {
+        finishReason,
+        content: {
+          role: "model",
+          parts: [
+            { text: typeof data === "string" ? data : JSON.stringify(data) },
+          ],
+        },
+      },
+    ],
+  });
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
+describe("quota fallback from Groq to Gemini", () => {
+  const fallbackOptions = () => ({
+    ...options,
+    gemini: {
+      apiKey: `gemini-${options.apiKey}`,
+      model: "gemini-3.5-flash-lite",
+    },
+  });
+  it("uses Groq alone when it succeeds and reports the actual provider", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(envelope(plan()));
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await interpretCommand(
+      "Kishore transactions",
+      catalog,
+      fallbackOptions(),
+    );
+    expect(result.understanding).toEqual({
+      provider: "groq",
+      model: options.model,
+      fallback: false,
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+  it("switches once on quota rejection and sends the same command, pending replies and schema", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 429 }))
+      .mockResolvedValueOnce(geminiEnvelope(plan()));
+    vi.stubGlobal("fetch", fetchMock);
+    const context = {
+      ...catalog,
+      context: {
+        pendingInput: { kind: "sale" as const, quantity: 150 },
+        pendingQuestion: { field: "unitPrice", question: "Price per bag?" },
+      },
+    };
+    const config = fallbackOptions();
+    const result = await interpretCommand(
+      "ஒரு மூட்டை 150 rupees",
+      context,
+      config,
+    );
+    expect(result.understanding).toEqual({
+      provider: "gemini",
+      model: config.gemini.model,
+      fallback: true,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [url, request] = fetchMock.mock.calls[1]!;
+    expect(url).toBe(
+      `https://generativelanguage.googleapis.com/v1beta/models/${config.gemini.model}:generateContent`,
+    );
+    expect(url).not.toContain(config.gemini.apiKey);
+    expect(request.headers["x-goog-api-key"]).toBe(config.gemini.apiKey);
+    expect(request.headers.Authorization).toBeUndefined();
+    expect(request.redirect).toBe("error");
+    const primary = JSON.parse(fetchMock.mock.calls[0]![1].body);
+    const backup = JSON.parse(request.body);
+    expect(backup.contents[0].parts[0].text).toBe(primary.messages[1].content);
+    expect(backup.systemInstruction.parts[0].text).toBe(
+      primary.messages[0].content,
+    );
+    expect(backup.generationConfig.responseJsonSchema).toEqual(
+      primary.response_format.json_schema.schema,
+    );
+    expect(backup.tools).toBeUndefined();
+    expect(request.signal).toBe(fetchMock.mock.calls[0]![1].signal);
+  });
+  it("skips the exhausted primary during cooldown and returns to it after reset", async () => {
+    let now = 1000000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, { status: 429, headers: { "retry-after": "10" } }),
+      )
+      .mockResolvedValueOnce(geminiEnvelope(plan()))
+      .mockResolvedValueOnce(geminiEnvelope(plan()))
+      .mockResolvedValueOnce(envelope(plan()));
+    vi.stubGlobal("fetch", fetchMock);
+    const config = fallbackOptions();
+    expect(
+      (await interpretCommand("command", catalog, config)).understanding
+        .provider,
+    ).toBe("gemini");
+    now += 2000;
+    await interpretCommand("another command", catalog, config);
+    expect(fetchMock.mock.calls[2]![0]).toContain(
+      "generativelanguage.googleapis.com",
+    );
+    now += 8000;
+    expect(
+      (await interpretCommand("command", catalog, config)).understanding
+        .provider,
+    ).toBe("groq");
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+  it("waits for the earliest provider reset when both quotas are exhausted and avoids retry loops", async () => {
+    let now = 1000000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, { status: 429, headers: { "retry-after": "100" } }),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            error: {
+              details: [
+                {
+                  "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                  retryDelay: "20.2s",
+                },
+              ],
+            },
+          },
+          { status: 429 },
+        ),
+      )
+      .mockResolvedValueOnce(geminiEnvelope(plan()));
+    vi.stubGlobal("fetch", fetchMock);
+    const config = fallbackOptions();
+    await expect(
+      extractCommand("command", catalog, config),
+    ).rejects.toMatchObject({ code: "AI_RATE_LIMIT", retryAfterSeconds: 21 });
+    now += 1000;
+    await expect(
+      extractCommand("different command", catalog, config),
+    ).rejects.toMatchObject({ code: "AI_RATE_LIMIT", retryAfterSeconds: 20 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    now += 20000;
+    await expect(
+      extractCommand("command", catalog, config),
+    ).resolves.toMatchObject({ intent: "GET_TRANSACTION_DETAILS" });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+  it.each([401, 500])("does not switch for primary HTTP %s", async (status) => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      extractCommand("command", catalog, fallbackOptions()),
+    ).rejects.toBeInstanceOf(Error);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+  it("does not switch after primary malformed output or invent a replacement plan", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(envelope("not json"));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      extractCommand("command", catalog, fallbackOptions()),
+    ).rejects.toMatchObject({ code: "AI_INVALID_RESPONSE" });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+  it.each(["MAX_TOKENS", "SAFETY"])(
+    "rejects unfinished or blocked backup output: %s",
+    async (reason) => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(new Response(null, { status: 429 }))
+        .mockResolvedValueOnce(geminiEnvelope(plan(), reason));
+      vi.stubGlobal("fetch", fetchMock);
+      await expect(
+        extractCommand("command", catalog, fallbackOptions()),
+      ).rejects.toMatchObject({ code: "AI_INVALID_RESPONSE" });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    },
+  );
+  it("validates backup references against the current business catalog", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response(null, { status: 429 }))
+        .mockResolvedValueOnce(
+          geminiEnvelope(plan({ input: { contactId: "f".repeat(24) } })),
+        ),
+    );
+    await expect(
+      interpretCommand("show records", catalog, fallbackOptions()),
+    ).rejects.toMatchObject({ code: "AI_INVALID_RESPONSE" });
+  });
+  it("keeps a backup sale as a proposal requiring missing details and confirmation", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response(null, { status: 429 }))
+        .mockResolvedValueOnce(
+          geminiEnvelope(
+            plan({
+              intent: "CREATE_SALE",
+              input: {
+                contactName: "Kishore",
+                quantity: 150,
+                unitPrice: "150",
+              },
+              query: {},
+            }),
+          ),
+        ),
+    );
+    const result = await interpretCommand(
+      "Kishore ku 150 mootai sell pannen one bag 150",
+      catalog,
+      fallbackOptions(),
+    );
+    expect(result.input).toMatchObject({
+      kind: "sale",
+      contactId: customer._id,
+      quantity: 150,
+      unitPrice: "150",
+    });
+    expect(result.canPreview).toBe(false);
+    expect(result.missing).toContain("productId");
+    expect(result.understanding.provider).toBe("gemini");
+  });
+  it.each([401, 403, 500])(
+    "does not expose credentials or raw backup errors for HTTP %s",
+    async (status) => {
+      const config = fallbackOptions();
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(new Response(null, { status: 429 }))
+        .mockResolvedValueOnce(
+          new Response(`${config.gemini.apiKey} confidential`, { status }),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      const error = await extractCommand("command", catalog, config).catch(
+        (error) => error,
+      );
+      expect(error.code).toBe(
+        status === 500 ? "AI_UNAVAILABLE" : "AI_CONFIGURATION",
+      );
+      expect(String(error)).not.toContain(config.gemini.apiKey);
+      expect(String(error)).not.toContain("confidential");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    },
+  );
+});
+
 describe("Groq command understanding", () => {
   it.each([
     { contactId: "f".repeat(24) },
@@ -118,17 +372,15 @@ describe("Groq command understanding", () => {
     };
     vi.stubGlobal(
       "fetch",
-      vi
-        .fn()
-        .mockResolvedValue(
-          envelope(
-            plan({
-              intent: "UPDATE_PENDING_DRAFT",
-              input: { productId: "f".repeat(24) },
-              query: {},
-            }),
-          ),
+      vi.fn().mockResolvedValue(
+        envelope(
+          plan({
+            intent: "UPDATE_PENDING_DRAFT",
+            input: { productId: "f".repeat(24) },
+            query: {},
+          }),
         ),
+      ),
     );
     const result = await interpretCommand(
       "change product",
@@ -163,17 +415,15 @@ describe("Groq command understanding", () => {
   it("treats null optional containers as missing details instead of losing the whole command", async () => {
     vi.stubGlobal(
       "fetch",
-      vi
-        .fn()
-        .mockResolvedValue(
-          envelope({
-            intent: "CREATE_EXPENSE",
-            input: null,
-            query: null,
-            candidateContactIds: null,
-            clarification: null,
-          }),
-        ),
+      vi.fn().mockResolvedValue(
+        envelope({
+          intent: "CREATE_EXPENSE",
+          input: null,
+          query: null,
+          candidateContactIds: null,
+          clarification: null,
+        }),
+      ),
     );
     const result = await interpretCommand(
       "record an expense",
@@ -529,7 +779,6 @@ describe("Groq command understanding", () => {
     );
     expect(result.canPreview).toBe(true);
     expect(result.input.kind).toBe("purchase");
-    expect(result.understanding.provider).toBe("groq");
   });
   it("maps AI-selected catalog names and aliases to server-owned IDs", () => {
     const result = validateCommandPlan(

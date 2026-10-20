@@ -27,9 +27,15 @@ const schema = z
     SARVAM_API_KEY: z.string().trim().default(""),
     SARVAM_MODEL: z.enum(["saaras:v3", "saaras:v4"]).default("saaras:v4"),
     GROQ_API_KEY: z.string().trim().default(""),
-    COMMAND_AI_MODEL: z
-      .literal("qwen/qwen3.8-27b")
-      .default("qwen/qwen3.8-27b"),
+    GEMINI_API_KEY: z.string().trim().default(""),
+    GEMINI_FALLBACK_ENABLED: z
+      .enum(["true", "false"])
+      .default("true")
+      .transform((value) => value === "true"),
+    GEMINI_COMMAND_AI_MODEL: z
+      .literal("gemini-3.5-flash-lite")
+      .default("gemini-3.5-flash-lite"),
+    COMMAND_AI_MODEL: z.literal("qwen/qwen3.8-27b").default("qwen/qwen3.8-27b"),
     COMMAND_AI_TIMEOUT_MS: z.coerce
       .number()
       .int()

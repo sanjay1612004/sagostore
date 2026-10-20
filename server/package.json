@@ -10,7 +10,7 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/server/src/server.js",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run tests/accounting.test.ts tests/command-ai.test.ts tests/voice-rate-limits.test.ts tests/speech.test.ts tests/mobile-api-url.test.ts tests/android-network-policy.test.ts tests/mobile-api-startup.test.ts tests/recording-upload.test.ts tests/haptics.test.ts tests/sarvam.test.ts tests/trade-defaults.test.ts tests/voice-follow-up.test.ts tests/voice-prompts.test.ts tests/dev-services.test.ts",
+    "test": "vitest run tests/accounting.test.ts tests/command-ai.test.ts tests/voice-rate-limits.test.ts tests/speech.test.ts tests/mobile-api-url.test.ts tests/android-network-policy.test.ts tests/mobile-api-startup.test.ts tests/recording-upload.test.ts tests/haptics.test.ts tests/sarvam.test.ts tests/trade-defaults.test.ts tests/voice-follow-up.test.ts tests/voice-prompts.test.ts tests/dev-services.test.ts tests/worker-database.test.ts",
     "test:integration": "vitest run tests/integration.test.ts",
     "recover": "tsx --env-file-if-exists=.env scripts/recover.ts",
     "test:speech": "vitest run tests/speech.integration.test.ts",

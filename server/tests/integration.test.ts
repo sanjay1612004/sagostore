@@ -254,7 +254,7 @@ beforeAll(async () => {
     email: "owner@example.com",
     password: "Testing-password-123",
     name: "Owner",
-    businessName: "SAI GANESH STORE",
+    businessName: "Shri Sai Ganesh Stores",
   });
   expect(a.status, a.text).toBe(201);
   owner = a.body.accessToken;
@@ -273,6 +273,102 @@ afterAll(async () => {
   vi.unstubAllGlobals();
 }, 30000);
 describe.sequential("transactional business acceptance scenario", () => {
+  it("switches an HTTP command to Gemini on quota exhaustion without making financial writes", async () => {
+    const { env } = await import("../src/config/env.js");
+    const { Record, Draft } = await import("../src/modules/models.js");
+    const previous = {
+      GROQ_API_KEY: env.GROQ_API_KEY,
+      GEMINI_API_KEY: env.GEMINI_API_KEY,
+      GEMINI_FALLBACK_ENABLED: env.GEMINI_FALLBACK_ENABLED,
+    };
+    const originalFetch = globalThis.fetch;
+    const providerFetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, { status: 429, headers: { "retry-after": "60" } }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          candidates: [
+            {
+              finishReason: "STOP",
+              content: {
+                role: "model",
+                parts: [
+                  {
+                    text: JSON.stringify({
+                      intent: "GET_STOCK",
+                      input: {},
+                      query: {},
+                      candidateContactIds: [],
+                      clarification: [],
+                    }),
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      );
+    const recordCount = await Record.countDocuments();
+    const draftCount = await Draft.countDocuments();
+    try {
+      env.GROQ_API_KEY = "quota-fallback-fictional-primary";
+      env.GEMINI_API_KEY = "quota-fallback-fictional-backup";
+      env.GEMINI_FALLBACK_ENABLED = true;
+      vi.stubGlobal("fetch", providerFetch);
+      const config = await request(app).get("/api/voice/config").set(bearer());
+      expect(config.body.understanding.fallback).toMatchObject({
+        provider: "gemini",
+        enabled: true,
+        ready: true,
+      });
+      expect(config.text).not.toContain(env.GEMINI_API_KEY);
+      const result = await request(app)
+        .post("/api/voice/text")
+        .set(bearer())
+        .send({ text: "stock evlo?" });
+      expect(result.status, result.text).toBe(200);
+      expect(result.body.understanding).toMatchObject({
+        provider: "gemini",
+        fallback: true,
+      });
+      expect(result.body.intent).toBe("GET_STOCK");
+      expect(providerFetch).toHaveBeenCalledTimes(2);
+      expect(await Record.countDocuments()).toBe(recordCount);
+      expect(await Draft.countDocuments()).toBe(draftCount);
+    } finally {
+      Object.assign(env, previous);
+      vi.stubGlobal("fetch", originalFetch);
+    }
+  });
+  it("recovers real model writes after a force-closed pool without resetting the API connection", async () => {
+    const { resetWorkerDatabaseConnection } =
+      await import("../src/shared/worker-database.js");
+    const uri = replica.getUri();
+    const connection = await mongoose.createConnection(uri).asPromise();
+    const Probe = connection.model(
+      "WorkerRecoveryProbe",
+      new mongoose.Schema({ value: Number }),
+    );
+    try {
+      const created = await Probe.create({ value: 1 });
+      await connection.close(true);
+      await connection.openUri(uri);
+      // Reproduces the old recovery path: connected driver, unusable models.
+      expect(connection.readyState).toBe(1);
+      await expect(Probe.findById(created._id).lean()).rejects.toThrow(
+        "Connection was force closed",
+      );
+      await resetWorkerDatabaseConnection(connection);
+      await connection.openUri(uri);
+      await Probe.updateOne({ _id: created._id }, { $set: { value: 2 } });
+      expect((await Probe.findById(created._id).lean())?.value).toBe(2);
+      expect(mongoose.connection.readyState).toBe(1);
+    } finally {
+      await connection.close(false);
+    }
+  });
   it("distinguishes an absent speech worker from a busy live worker without exposing recordings", async () => {
     const { QueueState, VoiceJob, User } =
       await import("../src/modules/models.js");

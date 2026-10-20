@@ -18,6 +18,8 @@ import { useSession } from "../store/session";
 import { loadPreferences, usePreferences } from "../store/preferences";
 import { useTheme } from "../theme";
 import { Button, ErrorNotice, Screen, T } from "../components/ui";
+import { STORE_NAME } from "../config/brand";
+import { StoreIcon } from "../components/store-icon";
 export default function RootLayout() {
   const [fonts, fontError] = useFonts({
     Inter: Inter_400Regular,
@@ -64,7 +66,7 @@ export default function RootLayout() {
   }, [user, ready, segments, fonts, error, locked]);
   const unlock = async () => {
     const result = await LocalAuthentication.authenticateAsync({
-      promptMessage: "Unlock TamilTrade AI",
+      promptMessage: `Unlock ${STORE_NAME}`,
       cancelLabel: "Cancel",
     });
     if (result.success) setLocked(false);
@@ -115,8 +117,9 @@ export default function RootLayout() {
         }}
       >
         <ActivityIndicator color={c.accent} />
+        <StoreIcon size={96} />
         <T size={24} weight="bold">
-          TamilTrade AI
+          {STORE_NAME}
         </T>
         <T color={c.muted}>பேசுங்க... பிசினஸை நாங்க பாத்துக்குறோம்!</T>
       </View>,
@@ -128,7 +131,10 @@ export default function RootLayout() {
           title="Your business. Secured."
           subtitle="Unlock to continue your session."
         >
-          <Button title="Unlock TamilTrade" onPress={() => void unlock()} />
+          <Button
+            title={`Unlock ${STORE_NAME}`}
+            onPress={() => void unlock()}
+          />
         </Screen>
       </Modal>
     ) : null;
@@ -137,6 +143,7 @@ export default function RootLayout() {
       <Stack
         screenOptions={{
           headerShown: false,
+          title: STORE_NAME,
           contentStyle: { backgroundColor: c.bg },
           animation: reducedMotion ? "none" : "slide_from_right",
         }}

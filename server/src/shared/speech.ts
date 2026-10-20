@@ -2,6 +2,22 @@
 const vocabulary =
   "வாங்கினேன், விற்றேன், மூட்டை, கிலோ, ரூபாய், விலை, லாரி வாடகை, பாக்கி, GPay";
 
+// Saaras v4 accepts at most 50 distinct phrases of up to 64 characters.
+// Hints help recognition; never insert them into a returned transcript.
+export function speechKeyterms(names: string[]) {
+  const terms: string[] = [];
+  const seen = new Set<string>();
+  for (const name of names) {
+    const term = name.normalize("NFC").replace(/\s+/gu, " ").trim();
+    const key = term.toLocaleLowerCase("en");
+    if (!term || Array.from(term).length > 64 || seen.has(key)) continue;
+    seen.add(key);
+    terms.push(term);
+    if (terms.length === 50) break;
+  }
+  return terms;
+}
+
 export function tamilSpeechPrompt(names: string[] = []) {
   const terms = [
     ...new Set(

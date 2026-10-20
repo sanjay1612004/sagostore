@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { speechKeyterms } from "../shared/speech.js";
 
 export class SpeechRecognitionError extends Error {
   constructor(
@@ -14,6 +15,7 @@ export type SarvamOptions = {
   apiKey: string;
   model: "saaras:v3" | "saaras:v4";
   timeoutMs: number;
+  keyterms?: string[];
 };
 
 const resultSchema = z.object({ transcript: z.string().max(10000) });
@@ -37,6 +39,10 @@ export async function transcribeSarvam(
   form.append("model", options.model);
   form.append("mode", "codemix");
   form.append("language_code", "unknown");
+  if (options.model === "saaras:v4") {
+    const keyterms = speechKeyterms(options.keyterms ?? []);
+    if (keyterms.length) form.append("keyterms", JSON.stringify(keyterms));
+  }
 
   let response: Response;
   const signal = AbortSignal.timeout(options.timeoutMs);

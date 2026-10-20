@@ -10,7 +10,7 @@ type Preferences = {
   ) => Promise<void>;
 };
 export const usePreferences = create<Preferences>((set, get) => ({
-  theme: "light",
+  theme: "dark",
   language: "ta",
   biometric: false,
   set: async (v) => {

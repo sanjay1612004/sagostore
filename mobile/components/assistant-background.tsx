@@ -28,17 +28,17 @@ export function AssistantBackground() {
           >
             <Stop
               offset="0"
-              stopColor={dark ? "#203D91" : "#D9E5FF"}
-              stopOpacity={dark ? 0.7 : 0.8}
+              stopColor={dark ? "#164B3C" : "#D1EFE0"}
+              stopOpacity={0.25}
             />
             <Stop
               offset="0.48"
-              stopColor={dark ? "#15234D" : "#E9EEFF"}
-              stopOpacity={dark ? 0.6 : 0.6}
+              stopColor={dark ? "#113027" : "#E5F2EB"}
+              stopOpacity={0.2}
             />
             <Stop
               offset="1"
-              stopColor={dark ? "#101114" : "#F5F5FC"}
+              stopColor={dark ? "#0D1518" : "#F4F7F6"}
               stopOpacity={0}
             />
           </RadialGradient>

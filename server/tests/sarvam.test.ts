@@ -49,6 +49,51 @@ describe("Sarvam Tamil-English transcription", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("supplies saved store phrases and aliases without cutting the customer prefix from the result", async () => {
+    const transcript = "Wow Storeக்கு 150 மூட்டை sell பண்ணேன். One bag 150.";
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ transcript }));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(
+      await transcribeSarvam(wav, {
+        ...options,
+        keyterms: ["Wow Store", "வாவ் ஸ்டோர்", "Sago", "wow store"],
+      }),
+    ).toBe(transcript);
+    const form = fetchMock.mock.calls[0]![1].body as FormData;
+    expect(JSON.parse(String(form.get("keyterms")))).toEqual([
+      "Wow Store",
+      "வாவ் ஸ்டோர்",
+      "Sago",
+    ]);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("never fabricates a missing customer from vocabulary hints", async () => {
+    const transcript = "150 மூட்டை sell பண்ணேன். One bag 150.";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(Response.json({ transcript })),
+    );
+    expect(
+      await transcribeSarvam(wav, { ...options, keyterms: ["Wow Store"] }),
+    ).toBe(transcript);
+  });
+
+  it("omits unsupported vocabulary hints for saaras v3", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(Response.json({ transcript: "hello" }));
+    vi.stubGlobal("fetch", fetchMock);
+    await transcribeSarvam(wav, {
+      ...options,
+      model: "saaras:v3",
+      keyterms: ["Wow Store"],
+    });
+    expect((fetchMock.mock.calls[0]![1].body as FormData).has("keyterms")).toBe(
+      false,
+    );
+  });
+
   it.each([
     [401, "SPEECH_AUTH"],
     [403, "SPEECH_AUTH"],
