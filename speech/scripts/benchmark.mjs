@@ -1,0 +1,9 @@
+import {readFile,writeFile} from 'node:fs/promises';
+import {performance} from 'node:perf_hooks';
+const [manifestPath,reportPath='speech-benchmark.json']=process.argv.slice(2);
+if(!manifestPath)throw new Error('Usage: node speech/scripts/benchmark.mjs recordings.json report.json');
+const samples=JSON.parse(await readFile(manifestPath,'utf8'));if(!Array.isArray(samples)||!samples.length)throw new Error('Provide recordings [{path,expected,model}]');
+function distance(a,b){let row=Array.from({length:b.length+1},(_,i)=>i);for(let i=1;i<=a.length;i++){const next=[i];for(let j=1;j<=b.length;j++)next[j]=Math.min(next[j-1]+1,row[j]+1,row[j-1]+(a[i-1]===b[j-1]?0:1));row=next;}return row[b.length];}
+const results=[];
+for(const sample of samples){const file=await readFile(sample.path);const form=new FormData();form.append('file',new Blob([file],{type:'audio/wav'}),'sample.wav');form.append('language','ta');form.append('response_format','json');const start=performance.now();const response=await fetch('http://127.0.0.1:8080/inference',{method:'POST',body:form,signal:AbortSignal.timeout(300000)});if(!response.ok)throw new Error(`Speech engine returned ${response.status}`);const result=await response.json();const expected=sample.expected.normalize('NFC').split(/\s+/),actual=result.text.trim().normalize('NFC').split(/\s+/);results.push({model:sample.model,latencyMs:performance.now()-start,wordErrorRate:distance(expected,actual)/expected.length,expected:sample.expected,actual:result.text});}
+const times=results.map(r=>r.latencyMs).sort((a,b)=>a-b);await writeFile(reportPath,JSON.stringify({samples:results,medianMs:times[Math.floor(times.length/2)],p95Ms:times[Math.min(times.length-1,Math.ceil(times.length*.95)-1)]},null,2));console.log(`Saved ${results.length} measured recordings to ${reportPath}. Treat this report as sensitive business data.`);

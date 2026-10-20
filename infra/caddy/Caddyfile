@@ -1,0 +1,13 @@
+{$API_DOMAIN} {
+    encode zstd gzip
+    request_body {
+        max_size 11MB
+    }
+    reverse_proxy 127.0.0.1:5000
+    header {
+        Strict-Transport-Security "max-age=31536000"
+        Referrer-Policy "no-referrer"
+    }
+    # API logs already redact credentials and public share tokens.
+    # Access logging is intentionally absent to avoid logging bearer share URLs.
+}

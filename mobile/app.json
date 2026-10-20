@@ -1,0 +1,44 @@
+{
+  "expo": {
+    "name": "TamilTrade AI",
+    "slug": "tamiltrade-ai",
+    "scheme": "tamiltrade",
+    "version": "0.1.0",
+    "orientation": "default",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.tamiltrade.ai",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Record Tamil business commands for your review and confirmation.",
+        "NSFaceIDUsageDescription": "Unlock your TamilTrade business account."
+      }
+    },
+    "android": {
+      "package": "com.tamiltrade.ai",
+      "permissions": ["RECORD_AUDIO", "POST_NOTIFICATIONS"]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-font",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Record Tamil business commands for your review and confirmation."
+        }
+      ],
+      "expo-notifications",
+      "expo-local-authentication",
+      "@react-native-community/datetimepicker",
+      "./plugins/with-lan-api.cjs"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    }
+  }
+}

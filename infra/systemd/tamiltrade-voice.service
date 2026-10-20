@@ -1,0 +1,27 @@
+[Unit]
+Description=TamilTrade single voice job worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=tamiltrade
+Group=tamiltrade
+WorkingDirectory=/opt/tamiltrade/current/server
+EnvironmentFile=/etc/tamiltrade/server.env
+ExecStart=/usr/bin/node /opt/tamiltrade/current/server/dist/server/src/workers/voice.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=240
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/tamiltrade
+MemoryMax=768M
+TasksMax=64
+Nice=5
+CPUQuota=75%
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

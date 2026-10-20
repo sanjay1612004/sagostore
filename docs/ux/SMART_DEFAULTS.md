@@ -1,0 +1,13 @@
+# Shorter forms and smart defaults
+
+The transaction form keeps the essential fields visible. Purchases ask for a supplier, product, quantity and unit price. Sales also show the source purchase lot. Date, delivery, additional costs, discount, tax, due date, invoice reference and notes are available under **More options**. Its summary shows the current date, delivery and whether charges, tax, a reference or notes have been added.
+
+Today, warehouse delivery, zero extra charges and cash payments retain the existing defaults. A contact, product or eligible source is selected only when the complete, successfully loaded option list contains exactly one choice. Partially loaded or refreshing lists never establish uniqueness. Selected fields stay editable. Rates, quantities and payment amounts remain user-entered; AI-provided values are preserved, including notes and references. Existing agreed tax treatment must be reviewed and changed when necessary.
+
+Payments open directly in the form, with **Receive / From customer** and **Pay / To supplier** choices. Selecting **Use full balance** fills the chosen transaction's remaining balance; a user can still enter a partial amount. Switching accounts, allocations or payment direction clears incompatible values. Changing a product clears its previous quantity, rate and source lot.
+
+Contacts start with a name and optional phone. Address, aliases, payment terms and credit limit remain editable under **Contact details & terms**, whose summary exposes the current terms and limit. Product forms keep unit and weight visible, with category and low-stock settings under **Product options**. Creating either from a transaction returns directly to that form with the new option selected.
+
+Collapsed values remain registered and are included in validation and submission. Invalid optional fields reveal their section, which stays open while they are corrected. Network errors preserve entered values. A server-generated review and explicit **Confirm & save** remain required for financial writes; source validity, available stock and overpayment checks remain enforced by the server.
+
+Validation on 19 October 2026: 103 unit tests, including six smart-default tests, and 20 isolated database/API tests passed. Chrome checks used fictional intercepted API responses, covering purchase review and confirmation, optional-value retention, contact/product creation return, partial payments, exact remaining balances, direction/product/delivery changes, paginated and ambiguous options, AI-prefilled values, and 320px dark/mobile layouts without console errors. These checks did not modify live business records. Android Hermes export passed; physical-device acceptance remains separate.

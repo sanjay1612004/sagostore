@@ -1,0 +1,10 @@
+[Unit]
+Description=Encrypted TamilTrade Atlas backup
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/tamiltrade/backup.env
+ExecStart=/opt/tamiltrade/current/infra/backup/maintenance-backup.sh
+NoNewPrivileges=true
+UMask=0077

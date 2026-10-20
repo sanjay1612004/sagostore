@@ -1,0 +1,149 @@
+import React, { useEffect, useState } from "react";
+import { AppState, View, ActivityIndicator } from "react-native";
+import { AppModal as Modal } from "../components/app-modal";
+import { Stack, router, useSegments } from "expo-router";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { SafeAreaProvider } from "react-native-safe-area-context";
+import { StatusBar } from "expo-status-bar";
+import { useFonts } from "expo-font";
+import { Inter_400Regular } from "@expo-google-fonts/inter/400Regular";
+import { Inter_500Medium } from "@expo-google-fonts/inter/500Medium";
+import { Inter_700Bold } from "@expo-google-fonts/inter/700Bold";
+import { NotoSansTamil_400Regular } from "@expo-google-fonts/noto-sans-tamil/400Regular";
+import { useReducedMotion } from "react-native-reanimated";
+import * as LocalAuthentication from "expo-local-authentication";
+import { queryClient, restoreSession } from "../services/api";
+import { useSession } from "../store/session";
+import { loadPreferences, usePreferences } from "../store/preferences";
+import { useTheme } from "../theme";
+import { Button, ErrorNotice, Screen, T } from "../components/ui";
+export default function RootLayout() {
+  const [fonts, fontError] = useFonts({
+    Inter: Inter_400Regular,
+    InterMedium: Inter_500Medium,
+    InterBold: Inter_700Bold,
+    Tamil: NotoSansTamil_400Regular,
+  });
+  const c = useTheme(),
+    theme = usePreferences((s) => s.theme),
+    reducedMotion = useReducedMotion();
+  const { user, ready } = useSession();
+  const segments = useSegments();
+  const [error, setError] = useState<unknown>(),
+    [locked, setLocked] = useState(false);
+  const bootstrap = async () => {
+    setError(undefined);
+    try {
+      await loadPreferences();
+      await restoreSession();
+      setLocked(
+        usePreferences.getState().biometric && !!useSession.getState().user,
+      );
+    } catch (e) {
+      setError(e);
+    }
+  };
+  useEffect(() => {
+    void bootstrap();
+    const sub = AppState.addEventListener("change", (state) => {
+      if (
+        state === "background" &&
+        usePreferences.getState().biometric &&
+        useSession.getState().user
+      )
+        setLocked(true);
+    });
+    return () => sub.remove();
+  }, []);
+  useEffect(() => {
+    if (!ready || !fonts || error || locked) return;
+    const inAuth = segments[0] === "(auth)";
+    if (!user && !inAuth) router.replace("/(auth)/login");
+    else if (user && inAuth) router.replace("/(tabs)");
+  }, [user, ready, segments, fonts, error, locked]);
+  const unlock = async () => {
+    const result = await LocalAuthentication.authenticateAsync({
+      promptMessage: "Unlock TamilTrade AI",
+      cancelLabel: "Cancel",
+    });
+    if (result.success) setLocked(false);
+  };
+  const shell = (children: React.ReactNode) => (
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: c.bg }}>
+      <SafeAreaProvider>
+        <QueryClientProvider client={queryClient}>
+          <StatusBar style={theme === "dark" ? "light" : "dark"} />
+          {children}
+        </QueryClientProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
+  );
+  if (error)
+    return shell(
+      <Screen
+        title="Let’s reconnect"
+        subtitle="Your account is kept securely on this device."
+      >
+        <ErrorNotice error={error} retry={() => void bootstrap()} />
+        <Button
+          title="Sign in with another account"
+          variant="secondary"
+          onPress={() => {
+            void useSession
+              .getState()
+              .clear()
+              .then(() => setError(undefined));
+          }}
+        />
+      </Screen>,
+    );
+  if (fontError)
+    return shell(
+      <View style={{ flex: 1, padding: 30, justifyContent: "center" }}>
+        <T>Fonts could not load. Restart the app to try again.</T>
+      </View>,
+    );
+  if (!fonts || !ready)
+    return shell(
+      <View
+        style={{
+          flex: 1,
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 18,
+        }}
+      >
+        <ActivityIndicator color={c.accent} />
+        <T size={24} weight="bold">
+          TamilTrade AI
+        </T>
+        <T color={c.muted}>பேசுங்க... பிசினஸை நாங்க பாத்துக்குறோம்!</T>
+      </View>,
+    );
+  const lockScreen =
+    locked && user ? (
+      <Modal visible presentationStyle="fullScreen">
+        <Screen
+          title="Your business. Secured."
+          subtitle="Unlock to continue your session."
+        >
+          <Button title="Unlock TamilTrade" onPress={() => void unlock()} />
+        </Screen>
+      </Modal>
+    ) : null;
+  return shell(
+    <>
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          contentStyle: { backgroundColor: c.bg },
+          animation: reducedMotion ? "none" : "slide_from_right",
+        }}
+      >
+        <Stack.Screen name="(tabs)" />
+      </Stack>
+      {lockScreen}
+    </>,
+  );
+}

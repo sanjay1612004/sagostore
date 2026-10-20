@@ -1,0 +1,29 @@
+[Unit]
+Description=Persistent multilingual whisper.cpp CPU server
+After=network-online.target
+
+[Service]
+User=tamiltrade
+Group=tamiltrade
+WorkingDirectory=/opt/tamiltrade/whisper.cpp
+EnvironmentFile=/etc/tamiltrade/server.env
+ExecStart=/opt/tamiltrade/whisper.cpp/build/bin/whisper-server --host 127.0.0.1 --port 8080 -m ${SPEECH_MODEL_PATH} -l ta -t ${SPEECH_THREADS} -p 1 -ng
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=180
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/tamiltrade
+MemoryMax=3G
+TasksMax=64
+Nice=10
+CPUQuota=150%
+UMask=0077
+StandardOutput=null
+StandardError=null
+# Upstream speech logs can contain transcripts; use API job metrics for monitoring.
+
+[Install]
+WantedBy=multi-user.target

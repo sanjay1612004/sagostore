@@ -1,0 +1,30 @@
+{
+  "name": "tamiltrade-ai",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "mobile",
+    "server",
+    "packages/shared"
+  ],
+  "engines": {
+    "node": ">=24.3.0 <25"
+  },
+  "scripts": {
+    "dev:server": "npm run dev -w server",
+    "dev:mobile": "npm run start -w mobile",
+    "setup:fonts": "node scripts/setup-fonts.mjs",
+    "build": "npm run build -w packages/shared && npm run build -w server",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test -w server",
+    "test:integration": "npm run test:integration -w server",
+    "check": "npm run typecheck && npm test && npm run build",
+    "format": "prettier --write \"mobile/**/*.{ts,tsx,json,cjs}\" \"server/**/*.{ts,json}\" \"packages/**/*.{ts,json}\" \"scripts/*.mjs\" \"*.json\" \"docs/**/*.md\" README.md --ignore-path .gitignore",
+    "test:speech": "npm run test:speech -w server"
+  },
+  "devDependencies": {
+    "prettier": "^3.9.10",
+    "tsx": "^4.20.6",
+    "typescript": "~5.9.3"
+  }
+}
