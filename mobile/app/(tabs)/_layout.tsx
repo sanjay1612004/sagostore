@@ -9,6 +9,12 @@ import { T } from "../../components/ui";
 import { useTheme } from "../../theme";
 import { LinearGradient } from "expo-linear-gradient";
 import { usePreferences } from "../../store/preferences";
+import {
+  navigationDuration,
+  navigationEasing,
+  tabSceneTransition,
+  useNavigationReducedMotion,
+} from "../../components/navigation-motion";
 const icons = [Home, ArrowLeftRight, Mic, Users, Grid2X2];
 function BottomBar({ state, emitter, navigateToTab }: BottomTabBarProps) {
   const c = useTheme(),
@@ -198,10 +204,24 @@ function BottomBar({ state, emitter, navigateToTab }: BottomTabBarProps) {
   );
 }
 export default function TabLayout() {
+  const reducedMotion = useNavigationReducedMotion();
+  const c = useTheme();
   return (
     <Tabs
       tabBar={(props) => <BottomBar {...props} />}
-      screenOptions={{ headerShown: false }}
+      screenOptions={{
+        headerShown: false,
+        sceneStyle: { backgroundColor: c.bg },
+        animation: reducedMotion ? "none" : "fade",
+        sceneStyleInterpolator: reducedMotion ? undefined : tabSceneTransition,
+        transitionSpec: {
+          animation: "timing",
+          config: {
+            duration: reducedMotion ? 0 : navigationDuration,
+            easing: navigationEasing,
+          },
+        },
+      }}
     >
       <Tabs.Screen name="index" />
       <Tabs.Screen name="transactions" />

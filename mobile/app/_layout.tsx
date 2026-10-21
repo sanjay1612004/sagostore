@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { AppState, View, ActivityIndicator } from "react-native";
+import { AppState, View, ActivityIndicator, Platform } from "react-native";
 import { AppModal as Modal } from "../components/app-modal";
 import { Stack, router, useSegments } from "expo-router";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -11,7 +11,6 @@ import { Inter_400Regular } from "@expo-google-fonts/inter/400Regular";
 import { Inter_500Medium } from "@expo-google-fonts/inter/500Medium";
 import { Inter_700Bold } from "@expo-google-fonts/inter/700Bold";
 import { NotoSansTamil_400Regular } from "@expo-google-fonts/noto-sans-tamil/400Regular";
-import { useReducedMotion } from "react-native-reanimated";
 import * as LocalAuthentication from "expo-local-authentication";
 import { queryClient, restoreSession } from "../services/api";
 import { useSession } from "../store/session";
@@ -20,6 +19,11 @@ import { useTheme } from "../theme";
 import { Button, ErrorNotice, Screen, T } from "../components/ui";
 import { STORE_NAME } from "../config/brand";
 import { StoreIcon } from "../components/store-icon";
+import {
+  navigationDuration,
+  useNavigationReducedMotion,
+  WebStackTransition,
+} from "../components/navigation-motion";
 export default function RootLayout() {
   const [fonts, fontError] = useFonts({
     Inter: Inter_400Regular,
@@ -29,7 +33,7 @@ export default function RootLayout() {
   });
   const c = useTheme(),
     theme = usePreferences((s) => s.theme),
-    reducedMotion = useReducedMotion();
+    reducedMotion = useNavigationReducedMotion();
   const { user, ready } = useSession();
   const segments = useSegments();
   const [error, setError] = useState<unknown>(),
@@ -141,11 +145,19 @@ export default function RootLayout() {
   return shell(
     <>
       <Stack
+        screenLayout={
+          Platform.OS === "web"
+            ? ({ children }) => (
+                <WebStackTransition>{children}</WebStackTransition>
+              )
+            : undefined
+        }
         screenOptions={{
           headerShown: false,
           title: STORE_NAME,
           contentStyle: { backgroundColor: c.bg },
-          animation: reducedMotion ? "none" : "slide_from_right",
+          animation: reducedMotion ? "none" : "fade_from_bottom",
+          animationDuration: navigationDuration,
         }}
       >
         <Stack.Screen name="(tabs)" />

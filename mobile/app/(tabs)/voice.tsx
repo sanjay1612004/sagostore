@@ -17,7 +17,7 @@ import {
   setAudioModeAsync,
 } from "expo-audio";
 import { useQuery } from "@tanstack/react-query";
-import { router, useFocusEffect } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { recordingFeedback } from "../../services/haptics";
 import {
   removeRecording,
@@ -27,6 +27,8 @@ import {
   type TradeInput,
   type Draft,
   type TradeRecord,
+  type VoiceCatalogAction,
+  type StockSummary,
   rupees,
 } from "@tamiltrade/shared";
 import {
@@ -63,6 +65,7 @@ import {
   ConfirmationSheet,
 } from "../../components/ui";
 import { VoiceMicrophoneButton } from "../../components/voice-orb";
+import { StockSummaryView } from "../../components/stock-summary";
 type Result = {
   intent: string;
   input: Partial<TradeInput>;
@@ -70,6 +73,7 @@ type Result = {
   clarification: string[];
   candidates: { _id: string; name: string }[];
   canPreview: boolean;
+  catalogAction?: VoiceCatalogAction;
   understanding?: {
     provider: "groq" | "gemini";
     model?: string;
@@ -88,6 +92,7 @@ type Result = {
     sourceLabel?: string;
   };
   answer?:
+    | StockSummary
     | {
         text?: string;
         balance?: number;
@@ -163,10 +168,53 @@ const states = {
   error: "Something needs your attention",
   cancelled: "Recording cancelled",
 };
+function CatalogDetails({ action }: { action: VoiceCatalogAction }) {
+  const c = useTheme();
+  const input = action.input;
+  const rows: [string, string][] = [["Name", input.name ?? ""]];
+  if (action.kind === "product") {
+    rows.push(
+      ["Trading unit", input.unit ?? ""],
+      ["Weight per unit", `${(input.weightGrams ?? 0) / 1000} kg`],
+      ["Low stock alert", `${input.lowStockQuantity ?? 10} units`],
+    );
+    if (input.category) rows.push(["Category", input.category]);
+  } else {
+    if (input.phone) rows.push(["Phone", input.phone]);
+    if (input.address) rows.push(["Address", input.address]);
+    if (input.aliases?.length)
+      rows.push(["Other names", input.aliases.join(", ")]);
+    rows.push(
+      ["Payment terms", `${input.paymentTermsDays ?? 30} days`],
+      [
+        "Credit limit",
+        Number(input.creditLimit ?? "0") === 0
+          ? "No enforced limit"
+          : `₹${input.creditLimit}`,
+      ],
+    );
+  }
+  return (
+    <View style={{ gap: 12 }}>
+      {rows.map(([label, value]) => (
+        <Row key={label} style={{ alignItems: "flex-start" }}>
+          <T size={13} color={c.muted}>
+            {label}
+          </T>
+          <T size={13} weight="medium" style={{ flex: 1, textAlign: "right" }}>
+            {value}
+          </T>
+        </Row>
+      ))}
+    </View>
+  );
+}
 export default function Voice() {
   const c = useTheme(),
     copy = useCopy();
   const language = usePreferences((preferences) => preferences.language);
+  const params = useLocalSearchParams<{ create?: string; request?: string }>();
+  const startedRequest = useRef<string | undefined>(undefined);
   const { width } = useWindowDimensions();
   const recorder = useAudioRecorder({
     ...RecordingPresets.HIGH_QUALITY,
@@ -189,6 +237,12 @@ export default function Voice() {
   const [saving, setSaving] = useState(false);
   const [reviewError, setReviewError] = useState<unknown>();
   const [savedRecord, setSavedRecord] = useState<TradeRecord | null>(null);
+  const [catalogReview, setCatalogReview] = useState(false);
+  const [savedCatalog, setSavedCatalog] = useState<{
+    kind: VoiceCatalogAction["kind"];
+    entityId: string;
+    name: string;
+  } | null>(null);
   const shownTranscriptJob = useRef<string | null>(null);
   const [focused, setFocused] = useState(false);
   const [composerFocused, setComposerFocused] = useState(false);
@@ -408,6 +462,7 @@ export default function Voice() {
       setJobId(null);
       setResult((previous) => (previous?.followUp ? previous : null));
       setSavedRecord(null);
+      setSavedCatalog(null);
       setLevels([]);
       await setAudioModeAsync({
         allowsRecording: true,
@@ -446,6 +501,7 @@ export default function Voice() {
     setJobId(null);
     setResult((previous) => (previous?.followUp ? previous : null));
     setSavedRecord(null);
+    setSavedCatalog(null);
     try {
       await stopVoicePrompt();
       setText(command);
@@ -479,6 +535,7 @@ export default function Voice() {
       setText("");
       setError(undefined);
       setReviewError(undefined);
+      setSavedCatalog(null);
       setState("idle");
     } catch (failure) {
       setError(failure);
@@ -526,11 +583,74 @@ export default function Voice() {
       setSaving(false);
     }
   };
+  const confirmCatalog = async () => {
+    if (!result?.catalogAction?.reviewId || !result.canPreview || saving)
+      return;
+    setSaving(true);
+    setReviewError(undefined);
+    try {
+      const receipt = await post<{
+        kind: VoiceCatalogAction["kind"];
+        entityId: string;
+        name: string;
+      }>("/api/voice/catalog/confirm", {
+        confirm: true,
+        reviewId: result.catalogAction.reviewId,
+      });
+      setCatalogReview(false);
+      setJobId(null);
+      setResult(null);
+      setText("");
+      setState("idle");
+      setSavedCatalog(receipt);
+      await invalidateBusiness();
+    } catch (failure) {
+      setReviewError(failure);
+    } finally {
+      setSaving(false);
+    }
+  };
   const processing =
     busy ||
     reviewBusy ||
     saving ||
     ["queued", "transcribing", "understanding"].includes(state);
+  useEffect(() => {
+    if (
+      !focused ||
+      !params.request ||
+      startedRequest.current === params.request ||
+      !["customer", "supplier", "product"].includes(params.create ?? "")
+    )
+      return;
+    if (processing || audio.isRecording) return;
+    startedRequest.current = params.request;
+    commandInFlight.current = true;
+    setBusy(true);
+    setState("understanding");
+    setError(undefined);
+    setJobId(null);
+    setText("");
+    setResult(null);
+    setSavedRecord(null);
+    setSavedCatalog(null);
+    void stopVoicePrompt()
+      .then(() =>
+        post<Result>("/api/voice/catalog/start", { kind: params.create }),
+      )
+      .then((response) => {
+        setResult(response);
+        setState("completed");
+      })
+      .catch((failure) => {
+        setError(failure);
+        setState("error");
+      })
+      .finally(() => {
+        commandInFlight.current = false;
+        setBusy(false);
+      });
+  }, [focused, params.request, params.create, processing, audio.isRecording]);
   const coolingDown = retryUntil > retryClock;
   const canRetryTranscript =
     job.data?.status === "error" && Boolean(job.data.transcript?.trim());
@@ -598,7 +718,9 @@ export default function Voice() {
                   : state === "completed"
                     ? result?.followUp
                       ? "Reply below"
-                      : states.completed
+                      : result?.intent.startsWith("GET_")
+                        ? copy("Answer ready", "பதில் தயார்")
+                        : states.completed
                     : states[state]}
         </T>
         {result?.understanding?.fallback && state === "completed" && (
@@ -673,6 +795,12 @@ export default function Voice() {
           <T size={19} weight="medium" accessibilityLiveRegion="polite">
             {copy(result.followUp.question, result.followUp.questionTamil)}
           </T>
+          {result.catalogAction?.input.name && (
+            <T size={12} color={c.muted}>
+              New {result.catalogAction.kind} ·{" "}
+              {result.catalogAction.input.name}
+            </T>
+          )}
           {voicePromptUnavailable && (
             <T size={12} color={c.muted} accessibilityLiveRegion="polite">
               Voice playback is unavailable. For Tamil, enable or download a
@@ -782,6 +910,7 @@ export default function Voice() {
               setText(value);
               setResult((previous) => (previous?.followUp ? previous : null));
               setSavedRecord(null);
+              setSavedCatalog(null);
             }}
             placeholder={
               result?.followUp
@@ -862,10 +991,37 @@ export default function Voice() {
           </Row>
         </View>
       </View>
-      {result && !result.followUp && (
+      {result?.catalogAction && !result.followUp && (
+        <Card>
+          <T size={19} weight="bold">
+            New {result.catalogAction.kind}
+          </T>
+          <CatalogDetails action={result.catalogAction} />
+          <Button
+            title={`Review ${result.catalogAction.kind}`}
+            disabled={processing || audio.isRecording || !result.canPreview}
+            onPress={() => {
+              void stopVoicePrompt();
+              setReviewError(undefined);
+              setCatalogReview(true);
+            }}
+          />
+          <Button
+            title="Start over"
+            variant="secondary"
+            disabled={processing || audio.isRecording}
+            onPress={() => void startOver()}
+          />
+        </Card>
+      )}
+      {result && !result.followUp && !result.catalogAction && (
         <Card>
           <Row>
-            <ReceiptText color={c.muted} size={18} />
+            {result.intent === "GET_STOCK" ? (
+              <Package color={c.muted} size={18} />
+            ) : (
+              <ReceiptText color={c.muted} size={18} />
+            )}
             <T weight="bold">
               {result.followUp
                 ? "One more detail"
@@ -875,7 +1031,9 @@ export default function Voice() {
                     ? answer
                       ? "Saved transaction details"
                       : "Choose the account"
-                    : "Transaction details"}
+                    : result.intent === "GET_STOCK"
+                      ? copy("Current stock", "தற்போதைய இருப்பு")
+                      : "Transaction details"}
             </T>
           </Row>
           {!result.followUp &&
@@ -984,6 +1142,12 @@ export default function Voice() {
             "todaySales" in answer &&
             typeof answer.todaySales === "number" && (
               <T>Today’s sales: {rupees(answer.todaySales)}</T>
+            )}
+          {answer &&
+            !Array.isArray(answer) &&
+            "type" in answer &&
+            answer.type === "stock_summary" && (
+              <StockSummaryView summary={answer} />
             )}
           {answer &&
             !Array.isArray(answer) &&
@@ -1099,6 +1263,29 @@ export default function Voice() {
           />
         </Card>
       )}
+      {savedCatalog && (
+        <Card>
+          <T size={19} weight="bold">
+            {savedCatalog.name} added
+          </T>
+          <Button
+            title={
+              savedCatalog.kind === "product"
+                ? "Open inventory"
+                : "Open contact"
+            }
+            variant="secondary"
+            onPress={() =>
+              savedCatalog.kind === "product"
+                ? router.push("/inventory")
+                : router.push({
+                    pathname: "/contact/[id]",
+                    params: { id: savedCatalog.entityId },
+                  })
+            }
+          />
+        </Card>
+      )}
       {!result && !text && !processing && !audio.isRecording && (
         <View
           style={{
@@ -1156,6 +1343,35 @@ export default function Voice() {
           ))}
         </View>
       )}
+      <ConfirmationSheet
+        visible={catalogReview && !!result?.catalogAction}
+        onClose={() => {
+          if (!saving) setCatalogReview(false);
+        }}
+      >
+        {result?.catalogAction && (
+          <>
+            <T size={19} weight="bold">
+              New {result.catalogAction.kind}
+            </T>
+            <Card>
+              <CatalogDetails action={result.catalogAction} />
+            </Card>
+            {result.catalogAction.kind === "product" && (
+              <T size={12} color={c.muted}>
+                This adds the product to your catalog. Record a purchase to add
+                stock.
+              </T>
+            )}
+            <ErrorNotice error={reviewError} />
+            <Button
+              title={`Confirm & add ${result.catalogAction.kind}`}
+              busy={saving}
+              onPress={() => void confirmCatalog()}
+            />
+          </>
+        )}
+      </ConfirmationSheet>
       <ConfirmationSheet
         visible={!!draft}
         onClose={() => {

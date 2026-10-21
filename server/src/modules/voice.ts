@@ -5,7 +5,13 @@ import { mkdir, rm, readFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { id, rupees } from "@tamiltrade/shared";
+import {
+  id,
+  rupees,
+  contactSchema,
+  productSchema,
+  type VoiceCatalogAction,
+} from "@tamiltrade/shared";
 import { env } from "../config/env.js";
 import { assert } from "../shared/errors.js";
 import {
@@ -16,17 +22,23 @@ import {
   Record,
   User,
   QueueState,
+  Audit,
 } from "./models.js";
 import { interpretCommand, type CommandContext } from "./command-ai.js";
 import { speechSettings } from "../shared/speech-settings.js";
 import { balance } from "./trading.js";
+import { paise } from "../shared/money.js";
 import {
   dashboard,
   priceHistory,
-  inventory,
+  stockSummary,
   salesSummary,
 } from "./reporting.js";
-import type { Principal } from "./auth.js";
+import { authorize, type Principal } from "./auth.js";
+import {
+  catalogVoiceQuestion,
+  validateCatalogAction,
+} from "./voice-catalog.js";
 import { nextVoiceQuestion, voiceSourceOptions } from "./voice-follow-up.js";
 import { voiceWorkerStatus } from "../shared/voice-worker-lease.js";
 export async function understand(
@@ -66,6 +78,7 @@ export async function understand(
         purchaseId: conversation.purchaseId?.toString(),
         saleId: conversation.saleId?.toString(),
         pendingInput: conversation.pendingInput,
+        pendingCatalogAction: conversation.pendingCatalogAction,
         pendingQuestion: conversation.pendingQuestion,
       }
     : {};
@@ -162,19 +175,21 @@ export async function understand(
     active: true,
   }).lean();
   assert(user, 401, "SESSION_EXPIRED", "Account is unavailable");
-  const intentPermission = result.intent.startsWith("GET_")
-    ? "reports"
-    : result.intent.includes("INVOICE")
-      ? "invoices"
-      : result.input.kind === "purchase"
-        ? "purchases"
-        : result.input.kind === "sale"
-          ? "sales"
-          : result.input.kind === "expense"
-            ? "expenses"
-            : result.input.kind?.endsWith("payment")
-              ? "payments"
-              : undefined;
+  const intentPermission = result.catalogAction
+    ? "contacts"
+    : result.intent.startsWith("GET_")
+      ? "reports"
+      : result.intent.includes("INVOICE")
+        ? "invoices"
+        : result.input.kind === "purchase"
+          ? "purchases"
+          : result.input.kind === "sale"
+            ? "sales"
+            : result.input.kind === "expense"
+              ? "expenses"
+              : result.input.kind?.endsWith("payment")
+                ? "payments"
+                : undefined;
   assert(
     !intentPermission ||
       user.role === "owner" ||
@@ -198,7 +213,7 @@ export async function understand(
         "Select the customer or supplier to check their balance.",
       );
   } else if (result.intent === "GET_STOCK")
-    answer = await inventory(auth.businessId, 1, 50, result.input.productId);
+    answer = await stockSummary(auth.businessId, result.input.productId);
   else if (result.intent === "GET_DAILY_SALES")
     answer = await salesSummary(auth.businessId, {
       date: result.query.date,
@@ -346,16 +361,44 @@ export async function understand(
     result.input.kind && result.missing.includes("sourceId")
       ? await voiceSourceOptions(auth.businessId, result.input)
       : sources;
-  const question = nextVoiceQuestion(
-    result,
-    {
-      customers: entities(customers),
-      suppliers: entities(suppliers),
-      products: entities(products),
-    },
-    nextSources,
-  );
+  if (result.catalogAction?.input.name) {
+    const action = result.catalogAction;
+    const duplicate =
+      action.kind === "product"
+        ? await Product.exists({ ...scope, name: action.input.name }).collation(
+            { locale: "en", strength: 2 },
+          )
+        : await Contact.exists({
+            ...scope,
+            kind: action.kind,
+            name: action.input.name,
+          }).collation({ locale: "en", strength: 2 });
+    if (duplicate) {
+      result.clarification = [
+        `A ${action.kind} named ${action.input.name} already exists. Say a different name, or cancel and use the saved entry.`,
+      ];
+      result.canPreview = false;
+    }
+    action.reviewId = randomUUID();
+  } else if (result.catalogAction) result.catalogAction.reviewId = randomUUID();
+  const question = result.catalogAction
+    ? catalogVoiceQuestion(
+        result.catalogAction,
+        result.missing,
+        result.clarification,
+      )
+    : nextVoiceQuestion(
+        result,
+        {
+          customers: entities(customers),
+          suppliers: entities(suppliers),
+          products: entities(products),
+        },
+        nextSources,
+      );
   const followUp = question ? { id: randomUUID(), ...question } : undefined;
+  if (result.catalogAction)
+    result.catalogAction.ready = result.canPreview && !followUp;
   const selectedSource =
     result.input.kind && result.input.sourceId
       ? await Record.findOne({
@@ -397,16 +440,28 @@ export async function understand(
   }
   if (result.intent === "CANCEL_PENDING_ACTION") {
     update.pendingInput = null;
+    update.pendingCatalogAction = null;
     update.pendingQuestion = null;
     update.pendingSourceIds = [];
     answer = { text: "Draft cancelled. Nothing was saved." };
+  } else if (result.catalogAction) {
+    update.pendingCatalogAction = result.catalogAction;
+    update.pendingInput = null;
+    update.pendingQuestion = followUp ?? null;
+    update.pendingSourceIds = [];
   } else if (result.input.kind) {
+    update.pendingCatalogAction = null;
     update.pendingInput = result.input;
     update.pendingQuestion = followUp ?? null;
     update.pendingSourceIds =
       followUp?.field === "sourceId"
         ? nextSources.map((source) => source._id)
         : [];
+  } else if (result.intent.startsWith("GET_")) {
+    update.pendingCatalogAction = null;
+    update.pendingInput = null;
+    update.pendingQuestion = null;
+    update.pendingSourceIds = [];
   }
   await Conversation.findOneAndUpdate(
     { ...scope, userId: auth.userId },
@@ -482,6 +537,154 @@ voiceRouter.post("/text", async (req, res) => {
     .parse(req.body);
   res.json(await understand(req.auth, text, { contactId }));
 });
+voiceRouter.post("/catalog/start", authorize("contacts"), async (req, res) => {
+  const { kind } = z
+    .strictObject({ kind: z.enum(["customer", "supplier", "product"]) })
+    .parse(req.body);
+  const validated = validateCatalogAction(kind, {});
+  const catalogAction = {
+    ...validated.action,
+    reviewId: randomUUID(),
+    ready: false,
+  };
+  const question = catalogVoiceQuestion(catalogAction, validated.missing, []);
+  const followUp = question ? { id: randomUUID(), ...question } : undefined;
+  await Conversation.findOneAndUpdate(
+    { businessId: req.auth.businessId, userId: req.auth.userId },
+    {
+      $set: {
+        pendingCatalogAction: catalogAction,
+        pendingInput: null,
+        pendingQuestion: followUp,
+        pendingSourceIds: [],
+        expiresAt: new Date(Date.now() + 30 * 60000),
+      },
+    },
+    { upsert: true },
+  );
+  res.json({
+    intent: `CREATE_${kind.toUpperCase()}`,
+    input: {},
+    catalogAction,
+    missing: validated.missing,
+    clarification: [],
+    candidates: [],
+    canPreview: false,
+    followUp,
+  });
+});
+voiceRouter.post(
+  "/catalog/confirm",
+  authorize("contacts"),
+  async (req, res) => {
+    const { reviewId } = z
+      .strictObject({ confirm: z.literal(true), reviewId: z.string().uuid() })
+      .parse(req.body);
+    const saved = await mongoose.connection.transaction(async (session) => {
+      const scope = {
+        businessId: req.auth.businessId,
+        userId: req.auth.userId,
+      };
+      const conversation = await Conversation.findOne({
+        ...scope,
+        expiresAt: { $gt: new Date() },
+      }).session(session);
+      assert(
+        conversation,
+        409,
+        "VOICE_REVIEW_EXPIRED",
+        "This review has expired. Describe the entry again.",
+      );
+      if (conversation.lastCatalogSave?.reviewId === reviewId)
+        return conversation.lastCatalogSave;
+      const action = conversation.pendingCatalogAction as
+        VoiceCatalogAction | undefined;
+      assert(
+        action?.reviewId === reviewId,
+        409,
+        "VOICE_REVIEW_CHANGED",
+        "The details have changed. Review the latest entry before saving.",
+      );
+      const validated = validateCatalogAction(action.kind, action.input);
+      assert(
+        validated.valid && action.ready,
+        422,
+        "VOICE_DETAILS_REQUIRED",
+        "Answer the remaining question before saving.",
+      );
+      const filter = {
+        businessId: req.auth.businessId,
+        name: validated.action.input.name,
+      };
+      const duplicate =
+        action.kind === "product"
+          ? await Product.exists(filter)
+              .collation({ locale: "en", strength: 2 })
+              .session(session)
+          : await Contact.exists({ ...filter, kind: action.kind })
+              .collation({ locale: "en", strength: 2 })
+              .session(session);
+      assert(
+        !duplicate,
+        409,
+        "VOICE_DUPLICATE",
+        "This name is already saved. Use the existing entry or change the name.",
+      );
+      let entityId: string;
+      if (action.kind === "product") {
+        const [product] = await Product.create(
+          [
+            {
+              ...productSchema.parse(action.input),
+              businessId: req.auth.businessId,
+            },
+          ],
+          { session },
+        );
+        entityId = String(product!._id);
+      } else {
+        const input = contactSchema.parse({
+          ...action.input,
+          kind: action.kind,
+        });
+        const [contact] = await Contact.create(
+          [
+            {
+              ...input,
+              creditLimit: paise(input.creditLimit),
+              businessId: req.auth.businessId,
+            },
+          ],
+          { session },
+        );
+        entityId = String(contact!._id);
+      }
+      const receipt = {
+        reviewId,
+        kind: action.kind,
+        entityId,
+        name: validated.action.input.name,
+      };
+      conversation.lastCatalogSave = receipt;
+      conversation.pendingCatalogAction = null;
+      conversation.pendingQuestion = null;
+      await conversation.save({ session });
+      await Audit.create(
+        [
+          {
+            businessId: req.auth.businessId,
+            userId: req.auth.userId,
+            action: "VOICE_CREATE_" + action.kind.toUpperCase(),
+            entityId,
+          },
+        ],
+        { session },
+      );
+      return receipt;
+    });
+    res.status(201).json(saved);
+  },
+);
 voiceRouter.get("/history", async (req, res) => {
   const data = await Conversation.findOne({
     businessId: req.auth.businessId,

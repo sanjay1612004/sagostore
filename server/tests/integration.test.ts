@@ -94,6 +94,46 @@ beforeAll(async () => {
         });
       }
       const fixtures: Record<string, Partial<CommandPlan>> = {
+        "Add Voice Demo Mill as supplier phone 09876543210": {
+          intent: "CREATE_SUPPLIER",
+          input: {
+            name: "Voice Demo Mill",
+            contactName: "Voice Demo Mill",
+            phone: "09876543210",
+            paymentTermsDays: 15,
+          },
+        },
+        "Correct phone to +919876543210": {
+          intent: "UPDATE_PENDING_DRAFT",
+          input: { phone: "+919876543210" },
+        },
+        "Voice Demo Customer, 09876543211, credit limit 2500": {
+          intent: "UPDATE_PENDING_DRAFT",
+          input: {
+            name: "Voice Demo Customer",
+            contactName: "Voice Demo Customer",
+            phone: "09876543211",
+            creditLimit: "2500",
+            address: "Salem",
+            aliases: ["மாதிரி கடை"],
+          },
+        },
+        "Add Rice Demo product": {
+          intent: "CREATE_PRODUCT",
+          input: { name: "Rice Demo", productName: "Rice Demo" },
+        },
+        "Trading unit bag": {
+          intent: "UPDATE_PENDING_DRAFT",
+          input: { unit: "bag" },
+        },
+        "25 kilograms per bag, low stock 5": {
+          intent: "UPDATE_PENDING_DRAFT",
+          input: { weightGrams: 25000, lowStockQuantity: 5 },
+        },
+        "Cancel the catalog entry": {
+          intent: "CANCEL_PENDING_ACTION",
+          input: {},
+        },
         "Start a purchase from ABC Mill for Sago": {
           intent: "CREATE_PURCHASE",
           input: { contactId: supplierId, productId },
@@ -131,6 +171,10 @@ beforeAll(async () => {
           },
         },
         "stock எவ்வளவு?": { intent: "GET_STOCK", input: {} },
+        "ஸ்டாக் எவ்வளவு இருக்கு?": {
+          intent: "GET_STOCK",
+          input: { aliases: [] },
+        },
         "How much sales has happened today?": {
           intent: "GET_DAILY_SALES",
           input: { date: indiaDate() },
@@ -770,6 +814,57 @@ describe.sequential("transactional business acceptance scenario", () => {
         .availableQuantity,
     ).toBe(30);
   });
+  it("answers the Tamil stock query with database quantities despite empty alias padding and makes no business writes", async () => {
+    const { Record, Draft, Movement, Contact, Product } =
+      await import("../src/modules/models.js");
+    const counts = () =>
+      Promise.all([
+        Record.countDocuments(),
+        Draft.countDocuments(),
+        Movement.countDocuments(),
+        Contact.countDocuments(),
+        Product.countDocuments(),
+      ]);
+    const before = await counts();
+    const expected = await request(app).get("/api/inventory").set(bearer());
+    expect(expected.status, expected.text).toBe(200);
+    const result = await request(app)
+      .post("/api/voice/text")
+      .set(bearer())
+      .send({ text: "ஸ்டாக் எவ்வளவு இருக்கு?" });
+    expect(result.status, result.text).toBe(200);
+    expect(result.body.intent).toBe("GET_STOCK");
+    expect(result.body.input).toEqual({});
+    expect(result.body.clarification).toEqual([]);
+    expect(result.body.canPreview).toBe(false);
+    expect(result.body.answer.type).toBe("stock_summary");
+    expect(
+      result.body.answer.products.find(
+        (item: { productId: string }) => item.productId === product,
+      ).warehouseQuantity,
+    ).toBe(30);
+    const warehouse = expected.body.items.reduce(
+      (sum: number, lot: { warehouseQuantity: number }) =>
+        sum + lot.warehouseQuantity,
+      0,
+    );
+    expect(
+      result.body.answer.products.reduce(
+        (sum: number, item: { warehouseQuantity: number }) =>
+          sum + item.warehouseQuantity,
+        0,
+      ),
+    ).toBe(warehouse);
+    expect(result.body.answer.products).toHaveLength(1);
+    expect(result.body.answer.products[0].unit).toBe("bag");
+    const foreign = await request(app)
+      .post("/api/voice/text")
+      .set(bearer(other))
+      .send({ text: "ஸ்டாக் எவ்வளவு இருக்கு?" });
+    expect(foreign.status, foreign.text).toBe(200);
+    expect(foreign.body.answer.products).toEqual([]);
+    expect(await counts()).toEqual(before);
+  });
   it("prevents overselling and overpayment", async () => {
     expect(
       (
@@ -1231,6 +1326,323 @@ describe.sequential("transactional business acceptance scenario", () => {
         contentType: "audio/mp4",
       });
     expect(upload.status, upload.text).toBe(415);
+  });
+  it("reviews a voice-created supplier, rejects stale/foreign reviews, and saves exactly once", async () => {
+    const { Contact, Record, Movement } =
+      await import("../src/modules/models.js");
+    const records = await Record.countDocuments(),
+      movements = await Movement.countDocuments();
+    const propose = await request(app)
+      .post("/api/voice/text")
+      .set(bearer())
+      .send({ text: "Add Voice Demo Mill as supplier phone 09876543210" });
+    expect(propose.status, propose.text).toBe(200);
+    expect(propose.body.catalogAction.kind).toBe("supplier");
+    expect(propose.body.canPreview).toBe(true);
+    expect(await Contact.countDocuments({ name: "Voice Demo Mill" })).toBe(0);
+    const oldReview = propose.body.catalogAction.reviewId;
+    const changed = await request(app)
+      .post("/api/voice/text")
+      .set(bearer())
+      .send({ text: "Correct phone to +919876543210" });
+    expect(changed.status, changed.text).toBe(200);
+    expect(changed.body.catalogAction.input.name).toBe("Voice Demo Mill");
+    expect(changed.body.catalogAction.reviewId).not.toBe(oldReview);
+    const confirm = (reviewId: string, token = owner) =>
+      request(app)
+        .post("/api/voice/catalog/confirm")
+        .set(bearer(token))
+        .send({ confirm: true, reviewId });
+    expect((await confirm(oldReview)).status).toBe(409);
+    expect(
+      (await confirm(changed.body.catalogAction.reviewId, other)).status,
+    ).toBe(409);
+    const reviewId = changed.body.catalogAction.reviewId;
+    const [first, repeat] = await Promise.all([
+      confirm(reviewId),
+      confirm(reviewId),
+    ]);
+    expect(first.status, first.text).toBe(201);
+    expect(repeat.status, repeat.text).toBe(201);
+    expect(first.body.entityId).toBe(repeat.body.entityId);
+    const rows = await Contact.find({ name: "Voice Demo Mill" }).lean();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      phone: "+919876543210",
+      kind: "supplier",
+      paymentTermsDays: 15,
+    });
+    expect(await Record.countDocuments()).toBe(records);
+    expect(await Movement.countDocuments()).toBe(movements);
+  });
+  it("starts contact entry without an AI call, merges a voice reply, and uses the manual schema/defaults", async () => {
+    const fetchCalls = vi.mocked(fetch).mock.calls.length;
+    const start = await request(app)
+      .post("/api/voice/catalog/start")
+      .set(bearer())
+      .send({ kind: "customer" });
+    expect(start.status, start.text).toBe(200);
+    expect(vi.mocked(fetch).mock.calls.length).toBe(fetchCalls);
+    expect(start.body.followUp.field).toBe("name");
+    expect(
+      (
+        await request(app)
+          .post("/api/voice/catalog/confirm")
+          .set(bearer())
+          .send({ confirm: true, reviewId: start.body.catalogAction.reviewId })
+      ).status,
+    ).toBe(422);
+    const reply = await request(app)
+      .post("/api/voice/text")
+      .set(bearer())
+      .send({ text: "Voice Demo Customer, 09876543211, credit limit 2500" });
+    expect(reply.status, reply.text).toBe(200);
+    expect(reply.body.catalogAction.input.phone).toBe("09876543211");
+    expect(reply.body.canPreview).toBe(true);
+    const saved = await request(app)
+      .post("/api/voice/catalog/confirm")
+      .set(bearer())
+      .send({ confirm: true, reviewId: reply.body.catalogAction.reviewId });
+    expect(saved.status, saved.text).toBe(201);
+    const detail = await request(app)
+      .get(`/api/contacts/${saved.body.entityId}`)
+      .set(bearer());
+    expect(detail.body).toMatchObject({
+      name: "Voice Demo Customer",
+      phone: "09876543211",
+      address: "Salem",
+      kind: "customer",
+      aliases: ["மாதிரி கடை"],
+      creditLimit: 250000,
+      paymentTermsDays: 30,
+      balance: 0,
+    });
+    expect(
+      (
+        await request(app)
+          .get(`/api/contacts/${saved.body.entityId}`)
+          .set(bearer(other))
+      ).status,
+    ).toBe(404);
+  });
+  it("collects product unit/weight by voice and creates a product without inventing stock", async () => {
+    const { Product, Record, Movement } =
+      await import("../src/modules/models.js");
+    const before = {
+      records: await Record.countDocuments(),
+      movements: await Movement.countDocuments(),
+    };
+    const command = (text: string) =>
+      request(app).post("/api/voice/text").set(bearer()).send({ text });
+    const first = await command("Add Rice Demo product");
+    expect(first.status, first.text).toBe(200);
+    expect(first.body.followUp.field).toBe("unit");
+    const unit = await command("Trading unit bag");
+    expect(unit.status, unit.text).toBe(200);
+    expect(unit.body.followUp.field).toBe("weightGrams");
+    expect(await Product.countDocuments({ name: "Rice Demo" })).toBe(0);
+    const weight = await command("25 kilograms per bag, low stock 5");
+    expect(weight.status, weight.text).toBe(200);
+    expect(weight.body.canPreview).toBe(true);
+    expect(weight.body.catalogAction.input).toMatchObject({
+      unit: "bag",
+      weightGrams: 25000,
+      lowStockQuantity: 5,
+    });
+    const saved = await request(app)
+      .post("/api/voice/catalog/confirm")
+      .set(bearer())
+      .send({ confirm: true, reviewId: weight.body.catalogAction.reviewId });
+    expect(saved.status, saved.text).toBe(201);
+    expect(await Product.findById(saved.body.entityId).lean()).toMatchObject({
+      name: "Rice Demo",
+      unit: "bag",
+      weightGrams: 25000,
+      lowStockQuantity: 5,
+    });
+    expect(await Record.countDocuments()).toBe(before.records);
+    expect(await Movement.countDocuments()).toBe(before.movements);
+    const duplicate = await command("Add Rice Demo product");
+    expect(duplicate.body.canPreview).toBe(false);
+    expect(duplicate.body.followUp).toBeDefined();
+    expect(duplicate.body.clarification.join(" ")).toContain("already exists");
+  });
+  it("requires contacts permission for every voice catalog entry point", async () => {
+    const login = await request(app)
+      .post("/auth/login")
+      .send({ email: "staff@example.com", password: "Testing-password-123" });
+    expect(login.status, login.text).toBe(200);
+    const token = login.body.accessToken;
+    for (const path of [
+      "/api/voice/catalog/start",
+      "/api/voice/catalog/confirm",
+    ]) {
+      const response = await request(app)
+        .post(path)
+        .set(bearer(token))
+        .send({ kind: "supplier", confirm: true, reviewId: randomUUID() });
+      expect(response.status, response.text).toBe(403);
+    }
+    const response = await request(app)
+      .post("/api/voice/text")
+      .set(bearer(token))
+      .send({ text: "Add Voice Demo Mill as supplier phone 09876543210" });
+    expect(response.status, response.text).toBe(403);
+  });
+  it("does not save a cancelled or expired voice catalog draft", async () => {
+    const { Conversation } = await import("../src/modules/models.js");
+    const start = await request(app)
+      .post("/api/voice/catalog/start")
+      .set(bearer())
+      .send({ kind: "supplier" });
+    const cancel = await request(app)
+      .post("/api/voice/text")
+      .set(bearer())
+      .send({ text: "Cancel the catalog entry" });
+    expect(cancel.status, cancel.text).toBe(200);
+    expect(
+      (
+        await request(app)
+          .post("/api/voice/catalog/confirm")
+          .set(bearer())
+          .send({ confirm: true, reviewId: start.body.catalogAction.reviewId })
+      ).status,
+    ).toBe(409);
+    const again = await request(app)
+      .post("/api/voice/catalog/start")
+      .set(bearer())
+      .send({ kind: "supplier" });
+    await Conversation.updateOne(
+      { "pendingCatalogAction.reviewId": again.body.catalogAction.reviewId },
+      { expiresAt: new Date(0) },
+    );
+    expect(
+      (
+        await request(app)
+          .post("/api/voice/catalog/confirm")
+          .set(bearer())
+          .send({ confirm: true, reviewId: again.body.catalogAction.reviewId })
+      ).status,
+    ).toBe(409);
+  });
+  it("summarizes all stock lots by product with saved units and separate direct deliveries", async () => {
+    const { Product, Record } = await import("../src/modules/models.js");
+    const { stockSummary } = await import("../src/modules/reporting.js");
+    const businessId = new mongoose.Types.ObjectId(),
+      foreignId = new mongoose.Types.ObjectId();
+    const productInput = { businessId, category: "", lowStockQuantity: 10 };
+    const [bags, kilograms, empty, directOnly, foreign] = await Product.create([
+      {
+        ...productInput,
+        name: "Demo Bag Rice",
+        unit: "bag",
+        weightGrams: 50000,
+      },
+      {
+        ...productInput,
+        name: "Demo Kilogram Rice",
+        unit: "kg",
+        weightGrams: 1000,
+      },
+      { ...productInput, name: "Demo Empty", unit: "bag", weightGrams: 25000 },
+      {
+        ...productInput,
+        name: "Demo Direct Only",
+        unit: "carton",
+        weightGrams: 10000,
+      },
+      {
+        ...productInput,
+        businessId: foreignId,
+        name: "Foreign product",
+        unit: "box",
+        weightGrams: 5000,
+      },
+    ]);
+    const lot = (
+      productId: mongoose.Types.ObjectId,
+      quantity: number,
+      allocatedQuantity = 0,
+      delivery = "warehouse",
+    ) => ({
+      businessId,
+      productId,
+      productName: "Old product label",
+      kind: "purchase",
+      status: "posted",
+      input: { kind: "purchase" },
+      date: "2026-10-21",
+      delivery,
+      quantity,
+      allocatedQuantity,
+    });
+    try {
+      await Record.insertMany([
+        ...Array.from({ length: 51 }, () => lot(bags!._id, 1)),
+        lot(bags!._id, 289),
+        lot(bags!._id, 12, 2, "direct"),
+        lot(bags!._id, 100, 100),
+        { ...lot(bags!._id, 1000), status: "reversed" },
+        { ...lot(bags!._id, 1000), kind: "sale" },
+        lot(kilograms!._id, 7),
+        lot(kilograms!._id, 3, 1),
+        lot(empty!._id, 100, 100),
+        lot(directOnly!._id, 8, 0, "direct"),
+        { ...lot(foreign!._id, 10000), businessId: foreignId },
+      ]);
+      const before = await Record.countDocuments();
+      const summary = await stockSummary(String(businessId));
+      expect(summary.type).toBe("stock_summary");
+      expect(summary.products).toHaveLength(3);
+      expect(
+        summary.products.find((item) => item.productId === String(bags!._id)),
+      ).toEqual({
+        productId: String(bags!._id),
+        productName: "Demo Bag Rice",
+        unit: "bag",
+        weightGrams: 50000,
+        warehouseQuantity: 340,
+        directQuantity: 10,
+      });
+      expect(
+        summary.products.find(
+          (item) => item.productId === String(kilograms!._id),
+        ),
+      ).toMatchObject({ unit: "kg", warehouseQuantity: 9, directQuantity: 0 });
+      expect(
+        summary.products.find(
+          (item) => item.productId === String(directOnly!._id),
+        ),
+      ).toMatchObject({
+        unit: "carton",
+        warehouseQuantity: 0,
+        directQuantity: 8,
+      });
+      expect(
+        summary.products.some((item) => item.productId === String(empty!._id)),
+      ).toBe(false);
+      const filtered = await stockSummary(
+        String(businessId),
+        String(bags!._id),
+      );
+      expect(filtered.products).toHaveLength(1);
+      expect(filtered.products[0]).toMatchObject({ warehouseQuantity: 340 });
+      expect(
+        (await stockSummary(String(businessId), String(foreign!._id))).products,
+      ).toEqual([]);
+      expect(
+        (await stockSummary(String(businessId), String(empty!._id))).products,
+      ).toEqual([]);
+      expect(
+        (await stockSummary(String(new mongoose.Types.ObjectId()))).products,
+      ).toEqual([]);
+      expect(await Record.countDocuments()).toBe(before);
+    } finally {
+      await Record.deleteMany({ businessId: { $in: [businessId, foreignId] } });
+      await Product.deleteMany({
+        businessId: { $in: [businessId, foreignId] },
+      });
+    }
   });
   it("rotates refresh tokens and revokes the session on replay", async () => {
     const r = await request(app)

@@ -352,6 +352,8 @@ export const Conversation = mongoose.model(
       purchaseId: Schema.Types.ObjectId,
       saleId: Schema.Types.ObjectId,
       pendingInput: Schema.Types.Mixed,
+      pendingCatalogAction: Schema.Types.Mixed,
+      lastCatalogSave: Schema.Types.Mixed,
       pendingQuestion: Schema.Types.Mixed,
       pendingSourceIds: { type: [String], default: [] },
       messages: { type: [Schema.Types.Mixed], default: [] },

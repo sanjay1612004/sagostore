@@ -38,6 +38,25 @@ export const productSchema = z.object({
   weightGrams: z.number().int().positive().max(1000000).default(50000),
   lowStockQuantity: z.number().int().min(0).default(10),
 });
+export const voiceCatalogFieldsSchema = z.strictObject({
+  name: z.string().trim().max(120).optional(),
+  phone: z.string().trim().max(40).optional(),
+  address: z.string().max(500).optional(),
+  aliases: z.array(z.string().trim().min(1).max(120)).max(20).optional(),
+  paymentTermsDays: z.number().int().min(0).max(365).optional(),
+  creditLimit: money.optional(),
+  category: z.string().max(100).optional(),
+  unit: z.string().trim().max(30).optional(),
+  weightGrams: z.number().int().positive().max(1000000).optional(),
+  lowStockQuantity: z.number().int().min(0).max(1000000).optional(),
+});
+export type VoiceCatalogFields = z.infer<typeof voiceCatalogFieldsSchema>;
+export type VoiceCatalogAction = {
+  kind: "customer" | "supplier" | "product";
+  input: VoiceCatalogFields;
+  reviewId?: string;
+  ready?: boolean;
+};
 export const tradeSchema = z
   .object({
     kind: z.enum([
@@ -111,6 +130,17 @@ export type Entity = { _id: string; name: string; aliases?: string[] };
 export type Contact = Entity &
   Omit<ContactInput, "creditLimit"> & { balance: number; creditLimit: number };
 export type Product = Entity & ProductInput;
+export type StockSummary = {
+  type: "stock_summary";
+  products: {
+    productId: string;
+    productName: string;
+    unit: string;
+    weightGrams?: number;
+    warehouseQuantity: number;
+    directQuantity: number;
+  }[];
+};
 export type TradeRecord = TradeInput & {
   _id: string;
   total: number;

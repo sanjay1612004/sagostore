@@ -188,6 +188,36 @@ export function Button({
     </Pressable>
   );
 }
+export function BackButton() {
+  const c = useTheme();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Back"
+      onPress={() => {
+        void selectionFeedback();
+        router.back();
+      }}
+      style={({ pressed }) => ({
+        alignSelf: "flex-start",
+        minHeight: 44,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 6,
+        borderRadius: 10,
+        backgroundColor: pressed ? c.elevated : "transparent",
+        opacity: pressed ? 0.75 : 1,
+      })}
+    >
+      <ArrowLeft size={16} color={c.text} />
+      <T size={13} weight="medium">
+        Back
+      </T>
+    </Pressable>
+  );
+}
 export function AppBrand() {
   return (
     <View

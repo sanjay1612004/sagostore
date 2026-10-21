@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { indiaDate, rupees } from "@tamiltrade/shared";
+import { indiaDate, rupees, type StockSummary } from "@tamiltrade/shared";
 import { Record, Product, Contact } from "./models.js";
 import { recordView } from "./trading.js";
 export async function salesSummary(
@@ -12,27 +12,43 @@ export async function salesSummary(
     productId?: string;
   } = {},
 ) {
-  const date = filters.date ?? (!filters.from && !filters.to ? indiaDate() : undefined);
+  const date =
+    filters.date ?? (!filters.from && !filters.to ? indiaDate() : undefined);
   const [summary] = await Record.aggregate<{ total: number; count: number }>([
-    { $match: {
-      businessId: new mongoose.Types.ObjectId(businessId),
-      status: "posted",
-      kind: "sale",
-      ...(date ? { date } : { date: {
-        ...(filters.from ? { $gte: filters.from } : {}),
-        ...(filters.to ? { $lte: filters.to } : {}),
-      } }),
-      ...(filters.contactId ? { contactId: new mongoose.Types.ObjectId(filters.contactId) } : {}),
-      ...(filters.productId ? { productId: new mongoose.Types.ObjectId(filters.productId) } : {}),
-    } },
+    {
+      $match: {
+        businessId: new mongoose.Types.ObjectId(businessId),
+        status: "posted",
+        kind: "sale",
+        ...(date
+          ? { date }
+          : {
+              date: {
+                ...(filters.from ? { $gte: filters.from } : {}),
+                ...(filters.to ? { $lte: filters.to } : {}),
+              },
+            }),
+        ...(filters.contactId
+          ? { contactId: new mongoose.Types.ObjectId(filters.contactId) }
+          : {}),
+        ...(filters.productId
+          ? { productId: new mongoose.Types.ObjectId(filters.productId) }
+          : {}),
+      },
+    },
     { $group: { _id: null, total: { $sum: "$total" }, count: { $sum: 1 } } },
   ]);
   const total = summary?.total ?? 0;
   const count = summary?.count ?? 0;
   const period = date
-    ? date === indiaDate() ? "Today’s sales" : `Sales on ${date}`
-    : filters.from && filters.to ? `Sales from ${filters.from} to ${filters.to}`
-      : filters.from ? `Sales from ${filters.from}` : `Sales through ${filters.to}`;
+    ? date === indiaDate()
+      ? "Today’s sales"
+      : `Sales on ${date}`
+    : filters.from && filters.to
+      ? `Sales from ${filters.from} to ${filters.to}`
+      : filters.from
+        ? `Sales from ${filters.from}`
+        : `Sales through ${filters.to}`;
   return {
     salesTotal: total,
     salesCount: count,
@@ -233,6 +249,69 @@ export async function dashboard(businessId: string) {
         ? ["Your warehouse has no available stock."]
         : []),
     ],
+  };
+}
+export async function stockSummary(
+  businessId: string,
+  productId?: string,
+): Promise<StockSummary> {
+  const remaining = { $subtract: ["$quantity", "$allocatedQuantity"] };
+  // Aggregate all posted lots before rendering; paging the lots first would
+  // understate stock once a product has more than 50 purchases.
+  const groups = await Record.aggregate<{
+    _id: mongoose.Types.ObjectId;
+    productName?: string;
+    warehouseQuantity: number;
+    directQuantity: number;
+  }>([
+    {
+      $match: {
+        businessId: new mongoose.Types.ObjectId(businessId),
+        kind: "purchase",
+        status: "posted",
+        ...(productId
+          ? { productId: new mongoose.Types.ObjectId(productId) }
+          : {}),
+        $expr: { $gt: [remaining, 0] },
+      },
+    },
+    {
+      $group: {
+        _id: "$productId",
+        productName: { $first: "$productName" },
+        warehouseQuantity: {
+          $sum: { $cond: [{ $eq: ["$delivery", "warehouse"] }, remaining, 0] },
+        },
+        directQuantity: {
+          $sum: { $cond: [{ $eq: ["$delivery", "direct"] }, remaining, 0] },
+        },
+      },
+    },
+  ]);
+  const products = await Product.find({
+    businessId,
+    _id: { $in: groups.map((group) => group._id) },
+  })
+    .select("name unit weightGrams")
+    .lean();
+  const metadata = new Map(
+    products.map((product) => [String(product._id), product]),
+  );
+  return {
+    type: "stock_summary",
+    products: groups
+      .map((group) => {
+        const product = metadata.get(String(group._id));
+        return {
+          productId: String(group._id),
+          productName: product?.name ?? group.productName ?? "Unnamed product",
+          unit: product?.unit ?? "unit",
+          ...(product?.weightGrams ? { weightGrams: product.weightGrams } : {}),
+          warehouseQuantity: group.warehouseQuantity,
+          directQuantity: group.directQuantity,
+        };
+      })
+      .sort((a, b) => a.productName.localeCompare(b.productName)),
   };
 }
 export async function inventory(

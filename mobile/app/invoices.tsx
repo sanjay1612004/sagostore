@@ -1,7 +1,6 @@
 import React, { useState } from "react";
 import { View, FlatList, Linking, Platform } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { router } from "expo-router";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { shareInvoicePdf } from "../services/invoice-file";
 import { type TradeRecord, rupees } from "@tamiltrade/shared";
@@ -18,6 +17,7 @@ import {
   Card,
   Row,
   Button,
+  BackButton,
   ErrorNotice,
   LoadingSkeleton,
   EmptyState,
@@ -258,11 +258,7 @@ export default function Invoices() {
         }}
         ListHeaderComponent={
           <View style={{ gap: 18, paddingBottom: 10 }}>
-            <Button
-              title="← Back"
-              variant="secondary"
-              onPress={() => router.back()}
-            />
+            <BackButton />
             <T size={30} weight="bold">
               Invoices
             </T>

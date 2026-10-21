@@ -17,8 +17,10 @@ import {
   EmptyState,
   LoadingSkeleton,
   AppBrand,
+  BackButton,
 } from "./ui";
 import { useTheme } from "../theme";
+import { AddByVoice } from "./add-by-voice";
 export function ContactsScreen({
   kind,
   back = false,
@@ -66,13 +68,7 @@ export function ContactsScreen({
         onEndReachedThreshold={0.3}
         ListHeaderComponent={
           <View style={{ gap: 18, paddingBottom: 8 }}>
-            {back && (
-              <Button
-                title="← Back"
-                variant="secondary"
-                onPress={() => router.back()}
-              />
-            )}
+            {back && <BackButton />}
             {!back && <AppBrand />}
             <T size={25} weight="bold">
               {kind === "customer" ? "Customers" : "Suppliers"}
@@ -89,13 +85,21 @@ export function ContactsScreen({
               placeholder="Search by name"
             />
             {hasPermission("contacts") && (
-              <Button
-                title={`Add ${kind}`}
-                icon={<Plus size={18} color={c.accentText} />}
-                onPress={() =>
-                  router.push({ pathname: "/contact-form", params: { kind } })
-                }
-              />
+              <Row>
+                <View style={{ flex: 1 }}>
+                  <Button
+                    title={`Add ${kind}`}
+                    icon={<Plus size={18} color={c.accentText} />}
+                    onPress={() =>
+                      router.push({
+                        pathname: "/contact-form",
+                        params: { kind },
+                      })
+                    }
+                  />
+                </View>
+                <AddByVoice kind={kind} />
+              </Row>
             )}
             <ErrorNotice error={q.error} retry={() => void q.refetch()} />
           </View>

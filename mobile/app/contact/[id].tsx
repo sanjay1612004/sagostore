@@ -11,6 +11,7 @@ import {
   Card,
   Row,
   Button,
+  BackButton,
   ErrorNotice,
   LoadingSkeleton,
   EmptyState,
@@ -55,11 +56,7 @@ export default function ContactDetails() {
         }}
         ListHeaderComponent={
           <View style={{ gap: 20, paddingBottom: 16 }}>
-            <Button
-              title="← Back"
-              variant="secondary"
-              onPress={() => router.back()}
-            />
+            <BackButton />
             <ErrorNotice
               error={contact.error ?? ledger.error}
               retry={() => {

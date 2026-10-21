@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { indiaDate } from "@tamiltrade/shared";
 import {
+  catalogVoiceQuestion,
+  validateCatalogAction,
+} from "../src/modules/voice-catalog.js";
+import {
   extractCommand,
   interpretCommand,
   validateCommandPlan,
@@ -66,6 +70,508 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+describe("empty aliases on stock and report responses", () => {
+  it.each(["groq", "gemini"] as const)(
+    "accepts the Tamil stock response from %s with no catalog fields or inherited draft",
+    async (provider) => {
+      const input = Object.fromEntries(
+        Object.keys(commandPlanSchema.shape.input.shape).map((key) => [
+          key,
+          null,
+        ]),
+      );
+      const query = Object.fromEntries(
+        Object.keys(commandPlanSchema.shape.query.shape).map((key) => [
+          key,
+          null,
+        ]),
+      );
+      const response = {
+        intent: "GET_STOCK",
+        input: { ...input, aliases: [] },
+        query,
+        candidateContactIds: [],
+        clarification: [],
+      };
+      const mock = vi.fn();
+      if (provider === "gemini")
+        mock.mockResolvedValueOnce(new Response(null, { status: 429 }));
+      mock.mockResolvedValueOnce(
+        provider === "groq" ? envelope(response) : geminiEnvelope(response),
+      );
+      vi.stubGlobal("fetch", mock);
+      const result = await interpretCommand(
+        "ஸ்டாக் எவ்வளவு இருக்கு?",
+        {
+          ...catalog,
+          context: {
+            pendingInput: {
+              kind: "purchase",
+              contactId: supplier._id,
+              productId: product._id,
+              quantity: 20,
+            },
+            pendingCatalogAction: {
+              kind: "supplier",
+              input: { name: "Demo Store", aliases: ["demo"] },
+            },
+          },
+        },
+        {
+          ...options,
+          ...(provider === "gemini"
+            ? {
+                gemini: {
+                  apiKey: `stock-${options.apiKey}`,
+                  model: "gemini-3.5-flash-lite",
+                },
+              }
+            : {}),
+        },
+      );
+      expect(result.intent).toBe("GET_STOCK");
+      expect(result.input).toEqual({});
+      expect(result.query).toEqual({});
+      expect(result.catalogAction).toBeUndefined();
+      expect(result.canPreview).toBe(false);
+      expect(result.clarification).toEqual([]);
+      expect(mock).toHaveBeenCalledTimes(provider === "groq" ? 1 : 2);
+    },
+  );
+  it.each([
+    "GET_STOCK",
+    "GET_DAILY_SALES",
+    "GET_MONTHLY_REPORT",
+    "GET_TRANSACTION_DETAILS",
+  ] as const)(
+    "preserves meaningful filters on %s while removing empty aliases",
+    (intent) => {
+      const result = validateCommandPlan(
+        plan({
+          intent,
+          input: { productName: product.name, aliases: [] },
+          query:
+            intent === "GET_DAILY_SALES" || intent === "GET_TRANSACTION_DETAILS"
+              ? { date: "2026-10-21" }
+              : {},
+        }),
+        "report",
+        catalog,
+      );
+      expect(result.input).toEqual({ productId: product._id });
+      expect(result.clarification).toEqual([]);
+      expect(result.canPreview).toBe(false);
+      if (intent === "GET_DAILY_SALES" || intent === "GET_TRANSACTION_DETAILS")
+        expect(result.query.date).toBe("2026-10-21");
+    },
+  );
+  it.each([
+    { aliases: ["Not an empty field"] },
+    { aliases: [], quantity: 10 },
+    { aliases: [], amount: "100" },
+  ])(
+    "still rejects meaningful unrelated fields in a stock query: %j",
+    (input) => {
+      expect(() =>
+        validateCommandPlan(
+          plan({ intent: "GET_STOCK", input, query: {} }),
+          "stock",
+          catalog,
+        ),
+      ).toThrowError(expect.objectContaining({ code: "AI_INVALID_RESPONSE" }));
+    },
+  );
+  it("ignores empty contact aliases on a new product, but not unsupported product aliases", () => {
+    const input = {
+      name: "Demo Rice",
+      unit: "bag",
+      weightGrams: 25000,
+      aliases: [],
+    };
+    const result = validateCommandPlan(
+      plan({ intent: "CREATE_PRODUCT", input, query: {} }),
+      "add product",
+      catalog,
+    );
+    expect(result.canPreview).toBe(true);
+    expect(result.catalogAction?.input).not.toHaveProperty("aliases");
+    expect(() =>
+      validateCommandPlan(
+        plan({
+          intent: "CREATE_PRODUCT",
+          input: { ...input, aliases: ["Rice"] },
+          query: {},
+        }),
+        "add product",
+        catalog,
+      ),
+    ).toThrow();
+  });
+  it("keeps an explicit empty aliases list when editing a pending contact", () => {
+    const result = validateCommandPlan(
+      plan({
+        intent: "UPDATE_PENDING_DRAFT",
+        input: { aliases: [] },
+        query: {},
+      }),
+      "clear aliases",
+      {
+        ...catalog,
+        context: {
+          pendingCatalogAction: {
+            kind: "customer",
+            input: { name: "Demo Customer", aliases: ["Old alias"] },
+          },
+        },
+      },
+    );
+    expect(result.catalogAction?.input.aliases).toEqual([]);
+    expect(result.canPreview).toBe(true);
+  });
+});
+describe("voice-created contacts and products", () => {
+  it.each(["groq", "gemini"] as const)(
+    "accepts a duplicated contactName in a new customer response from %s",
+    async (provider) => {
+      const response = {
+        ...plan({ intent: "CREATE_CUSTOMER", query: {} }),
+        input: {
+          name: "Demo Store",
+          contactName: "Demo Store",
+          phone: "09000000001",
+          aliases: [],
+          productName: null,
+          contactId: null,
+          productId: null,
+          amount: null,
+        },
+        query: { kind: null, date: null, from: null, to: null, scope: null },
+      };
+      const mock = vi.fn();
+      if (provider === "gemini")
+        mock.mockResolvedValueOnce(new Response(null, { status: 429 }));
+      mock.mockResolvedValueOnce(
+        provider === "groq" ? envelope(response) : geminiEnvelope(response),
+      );
+      vi.stubGlobal("fetch", mock);
+      const result = await interpretCommand(
+        "Add customer Demo store number, phone 09000000001.",
+        catalog,
+        {
+          ...options,
+          ...(provider === "gemini"
+            ? {
+                gemini: {
+                  apiKey: `backup-${options.apiKey}`,
+                  model: "gemini-3.5-flash-lite",
+                },
+              }
+            : {}),
+        },
+      );
+      expect(result.catalogAction).toMatchObject({
+        kind: "customer",
+        input: { name: "Demo Store", phone: "09000000001", aliases: [] },
+      });
+      expect(result.canPreview).toBe(true);
+      expect(result.understanding.provider).toBe(provider);
+      expect(mock).toHaveBeenCalledTimes(provider === "groq" ? 1 : 2);
+    },
+  );
+  it.each([
+    {
+      intent: "CREATE_CUSTOMER",
+      input: { contactName: "புதிய கடை" },
+      kind: "customer",
+      expected: "புதிய கடை",
+    },
+    {
+      intent: "CREATE_SUPPLIER",
+      input: { name: "Demo Mill", contactName: "demo   mill" },
+      kind: "supplier",
+      expected: "Demo Mill",
+    },
+    {
+      intent: "CREATE_PRODUCT",
+      input: {
+        name: "Demo Rice",
+        productName: "demo rice",
+        unit: "bag",
+        weightGrams: 25000,
+      },
+      kind: "product",
+      expected: "Demo Rice",
+    },
+    {
+      intent: "CREATE_PRODUCT",
+      input: { productName: "Demo Rice", unit: "bag", weightGrams: 25000 },
+      kind: "product",
+      expected: "Demo Rice",
+    },
+  ] as const)(
+    "normalizes a new $kind name supplied as an existing-reference field",
+    ({ intent, input, kind, expected }) => {
+      const result = validateCommandPlan(
+        plan({ intent, input, query: {} }),
+        "add entry",
+        catalog,
+      );
+      expect(result.catalogAction?.kind).toBe(kind);
+      expect(result.catalogAction?.input.name).toBe(expected);
+      expect(result.canPreview).toBe(true);
+    },
+  );
+  it("normalizes a contact name in a pending catalog reply without changing the stored phone", () => {
+    const result = validateCommandPlan(
+      plan({
+        intent: "UPDATE_PENDING_DRAFT",
+        input: { contactName: "Updated Demo" },
+        query: {},
+      }),
+      "change the name",
+      {
+        ...catalog,
+        context: {
+          pendingCatalogAction: {
+            kind: "customer",
+            input: { name: "Original Demo", phone: "09000000001" },
+          },
+        },
+      },
+    );
+    expect(result.catalogAction?.input).toMatchObject({
+      name: "Updated Demo",
+      phone: "09000000001",
+    });
+    expect(result.canPreview).toBe(true);
+  });
+  it.each([
+    {
+      intent: "CREATE_CUSTOMER",
+      input: { name: "First Store", contactName: "Second Store" },
+    },
+    { intent: "CREATE_PRODUCT", input: { name: "Rice", productName: "Sugar" } },
+    {
+      intent: "CREATE_CUSTOMER",
+      input: {
+        name: "Demo Store",
+        contactName: "Demo Store",
+        contactId: customer._id,
+      },
+    },
+    {
+      intent: "CREATE_CUSTOMER",
+      input: { name: "Demo Store", productName: "Demo Store" },
+    },
+    {
+      intent: "CREATE_PRODUCT",
+      input: { name: "Demo Rice", productName: "Demo Rice", amount: "100" },
+    },
+  ] as const)(
+    "still rejects conflicting names, IDs, and unrelated fields for $intent",
+    ({ intent, input }) => {
+      expect(() =>
+        validateCommandPlan(
+          plan({ intent, input, query: {} }),
+          "add entry",
+          catalog,
+        ),
+      ).toThrowError(
+        expect.objectContaining({
+          code: "AI_INVALID_RESPONSE",
+          reason: "catalog",
+        }),
+      );
+    },
+  );
+  it.each(["CREATE_CUSTOMER", "CREATE_SUPPLIER"] as const)(
+    "preserves a new name and phone for %s without matching the existing catalog",
+    (intent) => {
+      const result = validateCommandPlan(
+        plan({
+          intent,
+          input: {
+            name: "New Demo Store",
+            phone: "09876543210",
+            address: "Salem",
+            aliases: ["புதிய கடை"],
+            paymentTermsDays: 15,
+            creditLimit: "2500",
+          },
+          query: {},
+        }),
+        "Pudhu kadai add pannu",
+        catalog,
+      );
+      expect(result.catalogAction?.input).toMatchObject({
+        name: "New Demo Store",
+        phone: "09876543210",
+        creditLimit: "2500",
+        aliases: ["புதிய கடை"],
+      });
+      expect(result.catalogAction?.kind).toBe(
+        intent === "CREATE_CUSTOMER" ? "customer" : "supplier",
+      );
+      expect(result.input).toEqual({});
+      expect(result.canPreview).toBe(true);
+    },
+  );
+  it("asks for a contact name and never invents the phone", () => {
+    const result = validateCommandPlan(
+      plan({ intent: "CREATE_CUSTOMER", input: {}, query: {} }),
+      "add customer",
+      catalog,
+    );
+    expect(result.missing).toEqual(["name"]);
+    expect(result.canPreview).toBe(false);
+    expect(
+      catalogVoiceQuestion(result.catalogAction!, result.missing, [])?.field,
+    ).toBe("name");
+    const complete = validateCatalogAction("customer", {
+      name: "Demo Customer",
+    });
+    expect(complete.action.input.phone).toBeUndefined();
+    expect(complete.action.input.paymentTermsDays).toBe(30);
+    expect(complete.action.input.creditLimit).toBe("0");
+  });
+  it("asks to correct a misheard phone number rather than silently dropping it", () => {
+    const result = validateCommandPlan(
+      plan({
+        intent: "CREATE_SUPPLIER",
+        input: { name: "Demo Mill", phone: "12" },
+        query: {},
+      }),
+      "add supplier",
+      catalog,
+    );
+    expect(result.canPreview).toBe(false);
+    expect(result.missing).toContain("phone");
+    expect(
+      catalogVoiceQuestion(result.catalogAction!, result.missing, [])?.field,
+    ).toBe("phone");
+  });
+  it("collects the product unit and weight across replies without importing financial values", () => {
+    const first = validateCommandPlan(
+      plan({ intent: "CREATE_PRODUCT", input: { name: "Rice" }, query: {} }),
+      "Rice add pannu",
+      catalog,
+    );
+    expect(first.missing).toEqual(["unit", "weightGrams"]);
+    expect(first.catalogAction?.input.weightGrams).toBeUndefined();
+    const second = validateCommandPlan(
+      plan({
+        intent: "UPDATE_PENDING_DRAFT",
+        input: { unit: "bag" },
+        query: {},
+      }),
+      "mootai",
+      {
+        ...catalog,
+        context: {
+          pendingCatalogAction: first.catalogAction,
+          pendingInput: { kind: "purchase", quantity: 100 },
+        },
+      },
+    );
+    expect(second.missing).toEqual(["weightGrams"]);
+    const third = validateCommandPlan(
+      plan({
+        intent: "UPDATE_PENDING_DRAFT",
+        input: { weightGrams: 25000, lowStockQuantity: 5 },
+        query: {},
+      }),
+      "25 kilo, low stock 5",
+      { ...catalog, context: { pendingCatalogAction: second.catalogAction } },
+    );
+    expect(third.catalogAction?.input).toEqual({
+      name: "Rice",
+      unit: "bag",
+      weightGrams: 25000,
+      lowStockQuantity: 5,
+      category: "",
+    });
+    expect(third.canPreview).toBe(true);
+    expect(third.input).toEqual({});
+  });
+  it("requires a new weight when the product's trading unit is corrected", () => {
+    const result = validateCommandPlan(
+      plan({
+        intent: "UPDATE_PENDING_DRAFT",
+        input: { unit: "carton" },
+        query: {},
+      }),
+      "use carton",
+      {
+        ...catalog,
+        context: {
+          pendingCatalogAction: {
+            kind: "product",
+            input: { name: "Rice", unit: "bag", weightGrams: 25000 },
+          },
+        },
+      },
+    );
+    expect(result.canPreview).toBe(false);
+    expect(result.missing).toContain("weightGrams");
+  });
+  it("rejects mixed catalog/financial actions and preserves a fresh unrelated command", () => {
+    expect(() =>
+      validateCommandPlan(
+        plan({
+          intent: "CREATE_PRODUCT",
+          input: { name: "Rice", quantity: 100 },
+          query: {},
+        }),
+        "add rice",
+        catalog,
+      ),
+    ).toThrow();
+    const result = validateCommandPlan(
+      plan({ intent: "GET_STOCK", input: {}, query: {} }),
+      "stock evlo",
+      {
+        ...catalog,
+        context: {
+          pendingCatalogAction: { kind: "supplier", input: { name: "Demo" } },
+        },
+      },
+    );
+    expect(result.catalogAction).toBeUndefined();
+    expect(result.input).toEqual({});
+  });
+  it("sends catalog context to the real AI extraction path for a Tamil reply", async () => {
+    const mock = vi.fn().mockResolvedValue(
+      envelope(
+        plan({
+          intent: "UPDATE_PENDING_DRAFT",
+          input: { name: "புதிய கடை", phone: "09876543210" },
+          query: {},
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", mock);
+    const result = await interpretCommand(
+      "புதிய கடை, போன் 09876543210",
+      {
+        ...catalog,
+        context: {
+          pendingCatalogAction: { kind: "customer", input: {} },
+          pendingQuestion: { field: "name", question: "Customer name?" },
+        },
+      },
+      options,
+    );
+    expect(result.canPreview).toBe(true);
+    expect(result.catalogAction?.input.name).toBe("புதிய கடை");
+    const request = JSON.parse(mock.mock.calls[0]![1].body);
+    expect(
+      JSON.parse(request.messages[1].content).context.pendingCatalogAction.kind,
+    ).toBe("customer");
+    expect(
+      request.response_format.json_schema.schema.properties.intent.enum,
+    ).toContain("CREATE_PRODUCT");
+  });
 });
 describe("quota fallback from Groq to Gemini", () => {
   const fallbackOptions = () => ({

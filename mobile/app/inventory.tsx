@@ -10,6 +10,7 @@ import {
   Card,
   Row,
   Button,
+  BackButton,
   ErrorNotice,
   EmptyState,
   LoadingSkeleton,
@@ -17,6 +18,7 @@ import {
 } from "../components/ui";
 import { useTheme } from "../theme";
 import { hasPermission } from "../store/session";
+import { AddByVoice } from "../components/add-by-voice";
 type Lot = TradeRecord & {
   availableQuantity: number;
   warehouseQuantity: number;
@@ -64,20 +66,21 @@ export default function Inventory() {
         }}
         ListHeaderComponent={
           <View style={{ gap: 18, paddingBottom: 10 }}>
-            <Button
-              title="← Back"
-              variant="secondary"
-              onPress={() => router.back()}
-            />
+            <BackButton />
             <T size={30} weight="bold">
               Inventory
             </T>
             <T color={c.muted}>Every lot, from mill to customer.</T>
             {hasPermission("contacts") && (
-              <Button
-                title="Add product"
-                onPress={() => router.push("/product-form")}
-              />
+              <Row>
+                <View style={{ flex: 1 }}>
+                  <Button
+                    title="Add product"
+                    onPress={() => router.push("/product-form")}
+                  />
+                </View>
+                <AddByVoice kind="product" />
+              </Row>
             )}
             <ErrorNotice
               error={q.error ?? stock.error}
