@@ -66,6 +66,12 @@ import {
 } from "../../components/ui";
 import { VoiceMicrophoneButton } from "../../components/voice-orb";
 import { StockSummaryView } from "../../components/stock-summary";
+import {
+  stockQuantity,
+  stockWeight,
+  stockUnit,
+  stockUnitWeight,
+} from "../../services/stock-display";
 type Result = {
   intent: string;
   input: Partial<TradeInput>;
@@ -90,6 +96,8 @@ type Result = {
     contactName?: string;
     productName?: string;
     sourceLabel?: string;
+    unit?: string;
+    weightGrams?: number;
   };
   answer?:
     | StockSummary
@@ -178,6 +186,22 @@ function CatalogDetails({ action }: { action: VoiceCatalogAction }) {
       ["Weight per unit", `${(input.weightGrams ?? 0) / 1000} kg`],
       ["Low stock alert", `${input.lowStockQuantity ?? 10} units`],
     );
+    if (input.quantity !== undefined) {
+      rows.push([
+        "Stock to receive",
+        stockQuantity(input.quantity, input.unit ?? "unit"),
+      ]);
+      if (input.weightGrams)
+        rows.push([
+          "Total stock weight",
+          stockWeight(input.quantity, input.weightGrams),
+        ]);
+    }
+    if (input.unitPrice !== undefined)
+      rows.push([
+        `Purchase price per ${stockUnit(input.unit ?? "unit")}`,
+        `₹${input.unitPrice}`,
+      ]);
     if (input.category) rows.push(["Category", input.category]);
   } else {
     if (input.phone) rows.push(["Phone", input.phone]);
@@ -213,7 +237,11 @@ export default function Voice() {
   const c = useTheme(),
     copy = useCopy();
   const language = usePreferences((preferences) => preferences.language);
-  const params = useLocalSearchParams<{ create?: string; request?: string }>();
+  const params = useLocalSearchParams<{
+    create?: string;
+    stockProductId?: string;
+    request?: string;
+  }>();
   const startedRequest = useRef<string | undefined>(undefined);
   const { width } = useWindowDimensions();
   const recorder = useAudioRecorder({
@@ -270,7 +298,17 @@ export default function Voice() {
     }, [jobId]),
   );
   const speakQuestion = () => {
-    const question = result?.followUp;
+    const action = result?.catalogAction;
+    const question =
+      result?.followUp ??
+      (action?.kind === "supplier" && action.purchaseInput && action.ready
+        ? {
+            field: "supplierApproval",
+            question: `${action.input.name} is a new supplier. Shall I add it to your supplier list?`,
+            questionTamil: `${action.input.name} புதிய சப்ளையர். உங்கள் சப்ளையர் பட்டியலில் சேர்க்கலாமா?`,
+            choices: [],
+          }
+        : undefined);
     if (!question) return;
     setVoicePromptUnavailable(false);
     void speakVoicePrompt(
@@ -279,17 +317,24 @@ export default function Voice() {
       () => setVoicePromptUnavailable(true),
     );
   };
+  const spokenQuestionId =
+    result?.followUp?.id ??
+    (result?.catalogAction?.kind === "supplier" &&
+    result.catalogAction.purchaseInput &&
+    result.catalogAction.ready
+      ? result.catalogAction.reviewId
+      : undefined);
   useEffect(() => {
     if (
       !focused ||
       state !== "completed" ||
-      !result?.followUp ||
-      lastSpokenQuestion.current === result.followUp.id
+      !spokenQuestionId ||
+      lastSpokenQuestion.current === spokenQuestionId
     )
       return;
-    lastSpokenQuestion.current = result.followUp.id;
+    lastSpokenQuestion.current = spokenQuestionId;
     speakQuestion();
-  }, [focused, state, result?.followUp?.id, language]);
+  }, [focused, state, spokenQuestionId, language]);
   const uploadRef = useRef<{ uri: string; key: string } | null>(null);
   const speech = useQuery({
     queryKey: ["voice-settings"],
@@ -571,6 +616,7 @@ export default function Voice() {
         { confirm: true },
       );
       setSavedRecord(saved);
+      setSavedCatalog(null);
       setJobId(null);
       setDraft(null);
       setResult(null);
@@ -593,16 +639,19 @@ export default function Voice() {
         kind: VoiceCatalogAction["kind"];
         entityId: string;
         name: string;
+        stockEntry?: Result;
+        nextAction?: Result;
       }>("/api/voice/catalog/confirm", {
         confirm: true,
         reviewId: result.catalogAction.reviewId,
       });
       setCatalogReview(false);
       setJobId(null);
-      setResult(null);
+      const next = receipt.nextAction ?? receipt.stockEntry;
+      setResult(next ?? null);
       setText("");
-      setState("idle");
-      setSavedCatalog(receipt);
+      setState(next ? "completed" : "idle");
+      setSavedCatalog(next ? null : receipt);
       await invalidateBusiness();
     } catch (failure) {
       setReviewError(failure);
@@ -616,11 +665,13 @@ export default function Voice() {
     saving ||
     ["queued", "transcribing", "understanding"].includes(state);
   useEffect(() => {
+    const stockRequest = params.create === "stock" && params.stockProductId;
     if (
       !focused ||
       !params.request ||
       startedRequest.current === params.request ||
-      !["customer", "supplier", "product"].includes(params.create ?? "")
+      (!stockRequest &&
+        !["customer", "supplier", "product"].includes(params.create ?? ""))
     )
       return;
     if (processing || audio.isRecording) return;
@@ -632,11 +683,19 @@ export default function Voice() {
     setJobId(null);
     setText("");
     setResult(null);
+    setDraft(null);
+    setCatalogReview(false);
+    setReviewError(undefined);
     setSavedRecord(null);
     setSavedCatalog(null);
     void stopVoicePrompt()
       .then(() =>
-        post<Result>("/api/voice/catalog/start", { kind: params.create }),
+        post<Result>(
+          stockRequest ? "/api/voice/stock/start" : "/api/voice/catalog/start",
+          stockRequest
+            ? { productId: params.stockProductId }
+            : { kind: params.create },
+        ),
       )
       .then((response) => {
         setResult(response);
@@ -650,13 +709,124 @@ export default function Voice() {
         commandInFlight.current = false;
         setBusy(false);
       });
-  }, [focused, params.request, params.create, processing, audio.isRecording]);
+  }, [
+    focused,
+    params.request,
+    params.create,
+    params.stockProductId,
+    processing,
+    audio.isRecording,
+  ]);
   const coolingDown = retryUntil > retryClock;
   const canRetryTranscript =
     job.data?.status === "error" && Boolean(job.data.transcript?.trim());
   const answer = result?.answer;
+  const composer = (
+    <View>
+      <View
+        style={{
+          borderRadius: 16,
+          borderWidth: 1,
+          borderColor: composerFocused ? c.accent : c.border,
+          backgroundColor: c.surface,
+          padding: width < 360 ? 14 : 18,
+          gap: 16,
+        }}
+      >
+        <TextInput
+          accessibilityLabel="Your command / transcript"
+          multiline
+          numberOfLines={2}
+          editable={!processing && !audio.isRecording}
+          onFocus={() => setComposerFocused(true)}
+          onBlur={() => setComposerFocused(false)}
+          value={text}
+          onChangeText={(value) => {
+            setText(value);
+            setResult((previous) => (previous?.followUp ? previous : null));
+            setSavedRecord(null);
+            setSavedCatalog(null);
+          }}
+          placeholder={
+            result?.followUp
+              ? "Speak or type your reply…"
+              : "Describe a transaction or ask a question…"
+          }
+          placeholderTextColor={c.muted}
+          style={{
+            color: c.text,
+            fontFamily: "Inter",
+            fontSize: 16,
+            lineHeight: 24,
+            minHeight: 64,
+            maxHeight: 140,
+            borderWidth: 0,
+            borderColor: "transparent",
+            outlineWidth: 0,
+            outlineStyle: "solid",
+            outlineColor: "transparent",
+            boxShadow: "none",
+            backgroundColor: "transparent",
+            padding: 0,
+            textAlignVertical: "top",
+            ...(Platform.OS === "web"
+              ? { scrollbarWidth: "none" as const }
+              : {}),
+          }}
+        />
+        <Row>
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 7,
+              flex: 1,
+            }}
+          >
+            <T size={width < 360 ? 10 : 11} color={c.muted}>
+              Tamil · Tanglish · English
+            </T>
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Understand command"
+            accessibilityState={{
+              disabled:
+                audio.isRecording || processing || coolingDown || !text.trim(),
+              busy,
+            }}
+            disabled={
+              audio.isRecording || processing || coolingDown || !text.trim()
+            }
+            onPress={() => void understand()}
+            style={({ pressed }) => ({
+              width: 44,
+              height: 44,
+              borderRadius: 22,
+              backgroundColor: c.accent,
+              alignItems: "center",
+              justifyContent: "center",
+              opacity:
+                audio.isRecording || processing || coolingDown || !text.trim()
+                  ? 0.45
+                  : pressed
+                    ? 0.75
+                    : 1,
+            })}
+          >
+            {busy ? (
+              <ActivityIndicator color={c.accentText} size="small" />
+            ) : (
+              <ArrowUp size={23} color={c.accentText} />
+            )}
+          </Pressable>
+        </Row>
+      </View>
+    </View>
+  );
   return (
     <Screen
+      footer={composer}
       maxWidth={800}
       title={copy("Voice", "குரல் பதிவு")}
       action={
@@ -801,6 +971,16 @@ export default function Voice() {
               {result.catalogAction.input.name}
             </T>
           )}
+          {result.catalogAction?.kind === "product" &&
+            result.catalogAction.input.unitPrice !== undefined && (
+              <T size={12} color={c.muted}>
+                {result.catalogAction.input.quantity !== undefined
+                  ? `${stockQuantity(result.catalogAction.input.quantity, result.catalogAction.input.unit ?? "unit")} · `
+                  : ""}
+                ₹{result.catalogAction.input.unitPrice} per{" "}
+                {stockUnit(result.catalogAction.input.unit ?? "unit")}
+              </T>
+            )}
           {voicePromptUnavailable && (
             <T size={12} color={c.muted} accessibilityLiveRegion="polite">
               Voice playback is unavailable. For Tamil, enable or download a
@@ -814,10 +994,19 @@ export default function Voice() {
                 result.summary?.contactName,
                 result.summary?.productName,
                 result.input.quantity
-                  ? `${result.input.quantity} units`
+                  ? stockQuantity(
+                      result.input.quantity,
+                      result.summary?.unit ?? "unit",
+                    )
+                  : undefined,
+                result.summary?.weightGrams && result.summary?.unit
+                  ? stockUnitWeight(
+                      result.summary.weightGrams,
+                      result.summary.unit,
+                    )
                   : undefined,
                 result.input.unitPrice
-                  ? `₹${result.input.unitPrice}/unit`
+                  ? `₹${result.input.unitPrice}/${stockUnit(result.summary?.unit ?? "unit")}`
                   : undefined,
               ]
                 .filter(Boolean)
@@ -887,131 +1076,52 @@ export default function Voice() {
           </Row>
         </Card>
       )}
-      <View>
-        <View
-          style={{
-            borderRadius: 16,
-            borderWidth: 1,
-            borderColor: composerFocused ? c.accent : c.border,
-            backgroundColor: c.surface,
-            padding: width < 360 ? 14 : 18,
-            gap: 16,
-          }}
-        >
-          <TextInput
-            accessibilityLabel="Your command / transcript"
-            multiline
-            numberOfLines={2}
-            editable={!processing && !audio.isRecording}
-            onFocus={() => setComposerFocused(true)}
-            onBlur={() => setComposerFocused(false)}
-            value={text}
-            onChangeText={(value) => {
-              setText(value);
-              setResult((previous) => (previous?.followUp ? previous : null));
-              setSavedRecord(null);
-              setSavedCatalog(null);
-            }}
-            placeholder={
-              result?.followUp
-                ? "Speak or type your reply…"
-                : "Describe a transaction or ask a question…"
-            }
-            placeholderTextColor={c.muted}
-            style={{
-              color: c.text,
-              fontFamily: "Inter",
-              fontSize: 15,
-              lineHeight: 24,
-              minHeight: 64,
-              maxHeight: 140,
-              borderWidth: 0,
-              borderColor: "transparent",
-              outlineWidth: 0,
-              outlineStyle: "solid",
-              outlineColor: "transparent",
-              boxShadow: "none",
-              backgroundColor: "transparent",
-              padding: 0,
-              textAlignVertical: "top",
-              ...(Platform.OS === "web"
-                ? { scrollbarWidth: "none" as const }
-                : {}),
-            }}
-          />
-          <Row>
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                gap: 7,
-                flex: 1,
-              }}
-            >
-              <T size={width < 360 ? 10 : 11} color={c.muted}>
-                Tamil · Tanglish · English
-              </T>
-            </View>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Understand command"
-              accessibilityState={{
-                disabled:
-                  audio.isRecording ||
-                  processing ||
-                  coolingDown ||
-                  !text.trim(),
-                busy,
-              }}
-              disabled={
-                audio.isRecording || processing || coolingDown || !text.trim()
-              }
-              onPress={() => void understand()}
-              style={({ pressed }) => ({
-                width: 44,
-                height: 44,
-                borderRadius: 22,
-                backgroundColor: c.accent,
-                alignItems: "center",
-                justifyContent: "center",
-                opacity:
-                  audio.isRecording || processing || coolingDown || !text.trim()
-                    ? 0.45
-                    : pressed
-                      ? 0.75
-                      : 1,
-              })}
-            >
-              {busy ? (
-                <ActivityIndicator color={c.accentText} size="small" />
-              ) : (
-                <ArrowUp size={23} color={c.accentText} />
-              )}
-            </Pressable>
-          </Row>
-        </View>
-      </View>
       {result?.catalogAction && !result.followUp && (
         <Card>
           <T size={19} weight="bold">
             New {result.catalogAction.kind}
           </T>
           <CatalogDetails action={result.catalogAction} />
+          {result.catalogAction.kind === "supplier" &&
+            result.catalogAction.purchaseInput && (
+              <T accessibilityLiveRegion="polite">
+                {copy(
+                  `${result.catalogAction.input.name} is a new supplier. Shall I add it to your supplier list?`,
+                  `${result.catalogAction.input.name} புதிய சப்ளையர். உங்கள் சப்ளையர் பட்டியலில் சேர்க்கலாமா?`,
+                )}
+              </T>
+            )}
           <Button
-            title={`Review ${result.catalogAction.kind}`}
+            title={
+              result.catalogAction.kind === "supplier" &&
+              result.catalogAction.purchaseInput
+                ? "Yes, add supplier"
+                : `Review ${result.catalogAction.kind}`
+            }
             disabled={processing || audio.isRecording || !result.canPreview}
             onPress={() => {
               void stopVoicePrompt();
               setReviewError(undefined);
-              setCatalogReview(true);
+              if (
+                result.catalogAction?.kind === "supplier" &&
+                result.catalogAction.purchaseInput
+              )
+                void confirmCatalog();
+              else setCatalogReview(true);
             }}
           />
           <Button
-            title="Start over"
+            title={
+              result.catalogAction.kind === "supplier" &&
+              result.catalogAction.purchaseInput
+                ? "No, cancel purchase"
+                : "Start over"
+            }
             variant="secondary"
             disabled={processing || audio.isRecording}
             onPress={() => void startOver()}
           />
+          <ErrorNotice error={reviewError} />
         </Card>
       )}
       {result && !result.followUp && !result.catalogAction && (
@@ -1071,8 +1181,23 @@ export default function Voice() {
               )}
               {typeof result.input.quantity === "number" && (
                 <T>
-                  {result.input.quantity} units · ₹
-                  {result.input.unitPrice ?? "price needed"}/unit
+                  {stockQuantity(
+                    result.input.quantity,
+                    result.summary?.unit ?? "unit",
+                  )}{" "}
+                  · ₹{result.input.unitPrice ?? "price needed"}/
+                  {stockUnit(result.summary?.unit ?? "unit")}
+                </T>
+              )}
+              {!!result.summary?.weightGrams && !!result.summary.unit && (
+                <T color={c.muted} size={12}>
+                  {stockUnitWeight(
+                    result.summary.weightGrams,
+                    result.summary.unit,
+                  )}
+                  {result.input.quantity
+                    ? ` · ${stockWeight(result.input.quantity, result.summary.weightGrams)} total`
+                    : ""}
                 </T>
               )}
               {!!result.input.amount && <T>Amount: ₹{result.input.amount}</T>}
@@ -1359,8 +1484,11 @@ export default function Voice() {
             </Card>
             {result.catalogAction.kind === "product" && (
               <T size={12} color={c.muted}>
-                This adds the product to your catalog. Record a purchase to add
-                stock.
+                {result.catalogAction.input.quantity !== undefined ||
+                result.catalogAction.input.unitPrice !== undefined ||
+                result.catalogAction.purchaseInput?.kind === "purchase"
+                  ? "Next, I’ll ask for any remaining purchase details by voice. Stock is added after you review and confirm the purchase."
+                  : "This adds the product to your catalog. Use Add stock by voice in Inventory to receive stock."}
               </T>
             )}
             <ErrorNotice error={reviewError} />
@@ -1398,9 +1526,28 @@ export default function Voice() {
                 draft.input.kind === "sale") && (
                 <>
                   <T>
-                    Quantity: {draft.input.quantity} · Unit price: ₹
+                    Quantity:{" "}
+                    {stockQuantity(
+                      draft.input.quantity ?? 0,
+                      result?.summary?.unit ?? "unit",
+                    )}{" "}
+                    · Price per {stockUnit(result?.summary?.unit ?? "unit")}: ₹
                     {draft.input.unitPrice}
                   </T>
+                  {!!result?.summary?.weightGrams && !!result.summary.unit && (
+                    <T>
+                      {stockUnitWeight(
+                        result.summary.weightGrams,
+                        result.summary.unit,
+                      )}{" "}
+                      ·{" "}
+                      {stockWeight(
+                        draft.input.quantity ?? 0,
+                        result.summary.weightGrams,
+                      )}{" "}
+                      total
+                    </T>
+                  )}
                   <T>Delivery: {draft.input.delivery}</T>
                   {[
                     draft.input.transport,

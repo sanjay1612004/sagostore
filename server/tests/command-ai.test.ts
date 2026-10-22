@@ -71,6 +71,273 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
+describe("receiving a named product outside inventory", () => {
+  it("keeps the full name and receipt through new-product questions", () => {
+    const first = validateCommandPlan(
+      plan({
+        intent: "CREATE_PURCHASE",
+        input: {
+          productName: "Coimbatore sago",
+          contactName: supplier.name,
+          quantity: 20,
+          unitPrice: "1500",
+          date: "2026-10-20",
+          transport: "500",
+          delivery: "direct",
+        },
+        query: {},
+      }),
+      "Received Coimbatore sago from ABC Mill",
+      catalog,
+    );
+    expect(first.catalogAction?.input.name).toBe("Coimbatore sago");
+    expect(first.catalogAction?.purchaseInput).toMatchObject({
+      kind: "purchase",
+      contactId: supplier._id,
+      quantity: 20,
+      unitPrice: "1500",
+      date: "2026-10-20",
+      transport: "500",
+      delivery: "direct",
+    });
+    expect(first.clarification).toEqual([]);
+    expect(first.missing).not.toContain("name");
+    expect(first.missing).not.toContain("productId");
+    expect(
+      catalogVoiceQuestion(first.catalogAction!, first.missing, [])?.field,
+    ).toBe("unit");
+    const reply = validateCommandPlan(
+      plan({
+        intent: "UPDATE_PENDING_DRAFT",
+        input: { unit: "bag", weightGrams: 25000 },
+        query: {},
+      }),
+      "25 kg bags",
+      { ...catalog, context: { pendingCatalogAction: first.catalogAction } },
+    );
+    expect(reply.catalogAction?.input.name).toBe("Coimbatore sago");
+    expect(reply.catalogAction?.purchaseInput).toEqual(
+      first.catalogAction?.purchaseInput,
+    );
+    expect(reply.canPreview).toBe(true);
+  });
+
+  it("starts a receipt even when only the new product name was stated", () => {
+    const result = validateCommandPlan(
+      plan({
+        intent: "CREATE_PURCHASE",
+        input: { productName: "Coimbatore sago" },
+        query: {},
+      }),
+      "Today I got Coimbatore sago",
+      catalog,
+    );
+    expect(result.catalogAction?.purchaseInput?.kind).toBe("purchase");
+    expect(result.catalogAction?.input.name).toBe("Coimbatore sago");
+    expect(result.catalogAction?.input.quantity).toBeUndefined();
+    expect(result.catalogAction?.input.weightGrams).toBeUndefined();
+    expect(result.clarification).toEqual([]);
+  });
+
+  it.each(["CREATE_SALE", "GET_STOCK"] as const)(
+    "keeps saved-product clarification for %s",
+    (intent) => {
+      const result = validateCommandPlan(
+        plan({ intent, input: { productName: "Coimbatore sago" }, query: {} }),
+        "Coimbatore sago",
+        catalog,
+      );
+      expect(result.catalogAction).toBeUndefined();
+      expect(result.clarification).toContain("Choose the correct product.");
+    },
+  );
+});
+describe("supplier names in receipts", () => {
+  it("requires a ready receipt supplier review before accepting spoken approval", () => {
+    const approval = plan({
+      intent: "APPROVE_PENDING_SUPPLIER",
+      input: {},
+      query: {},
+    });
+    expect(() => validateCommandPlan(approval, "yes", catalog)).toThrowError(
+      expect.objectContaining({ code: "VOICE_REVIEW_CHANGED" }),
+    );
+    expect(() =>
+      validateCommandPlan(approval, "yes", {
+        ...catalog,
+        context: {
+          pendingCatalogAction: {
+            kind: "product",
+            input: { name: "Rice" },
+            ready: true,
+          },
+        },
+      }),
+    ).toThrowError(expect.objectContaining({ code: "VOICE_REVIEW_CHANGED" }));
+  });
+  const receipt = {
+    contactName: "Rathina Stores",
+    productName: product.name,
+    quantity: 20,
+    unitPrice: "1500",
+    transport: "500",
+    date: "2026-10-20",
+  };
+  it("uses a uniquely named saved supplier without another selection", () => {
+    const rathina = {
+      _id: "f".repeat(24),
+      name: "Rathina Stores",
+      aliases: ["ரத்தினா ஸ்டோர்ஸ்"],
+    };
+    for (const contactName of [
+      "rathina stores",
+      "Rathina Stores.",
+      "ரத்தினா ஸ்டோர்ஸ்",
+    ]) {
+      const result = validateCommandPlan(
+        plan({
+          intent: "CREATE_PURCHASE",
+          input: { ...receipt, contactName },
+          query: {},
+          candidateContactIds: [supplier._id],
+        }),
+        "bought from Rathina Stores",
+        { ...catalog, suppliers: [supplier, rathina] },
+      );
+      expect(result.input.contactId).toBe(rathina._id);
+      expect(result.candidates).toEqual([]);
+      expect(result.catalogAction).toBeUndefined();
+      expect(result.canPreview).toBe(true);
+    }
+  });
+  it("proposes a new supplier with the complete receipt, including both unsaved names", () => {
+    const result = validateCommandPlan(
+      plan({
+        intent: "CREATE_PURCHASE",
+        input: {
+          ...receipt,
+          productName: "Coimbatore sago",
+          unit: "bag",
+          weightGrams: 25000,
+        },
+        query: {},
+      }),
+      "bought Coimbatore sago from Rathina Stores",
+      catalog,
+    );
+    expect(result.catalogAction).toMatchObject({
+      kind: "supplier",
+      input: { name: "Rathina Stores" },
+      purchaseInput: {
+        kind: "purchase",
+        quantity: 20,
+        unitPrice: "1500",
+        transport: "500",
+        date: "2026-10-20",
+      },
+      productInput: {
+        name: "Coimbatore sago",
+        unit: "bag",
+        weightGrams: 25000,
+      },
+    });
+    expect(result.clarification).toEqual([]);
+    expect(result.missing).toEqual([]);
+    expect(result.canPreview).toBe(true);
+  });
+  it("recognizes a new supplier reply without losing an existing purchase", () => {
+    const result = validateCommandPlan(
+      plan({
+        intent: "UPDATE_PENDING_DRAFT",
+        input: { contactName: "Rathina Stores" },
+        query: {},
+      }),
+      "it is Rathina Stores",
+      {
+        ...catalog,
+        context: {
+          pendingInput: {
+            kind: "purchase",
+            productId: product._id,
+            quantity: 20,
+            unitPrice: "1500",
+            date: "2026-10-20",
+          },
+        },
+      },
+    );
+    expect(result.catalogAction?.kind).toBe("supplier");
+    expect(result.catalogAction?.purchaseInput).toMatchObject({
+      productId: product._id,
+      quantity: 20,
+      unitPrice: "1500",
+    });
+    expect(result.clarification).toEqual([]);
+  });
+  it("keeps product setup when the supplier is named during its questions", () => {
+    const first = validateCommandPlan(
+      plan({
+        intent: "CREATE_PURCHASE",
+        input: {
+          productName: "Coimbatore sago",
+          quantity: 20,
+          unitPrice: "1500",
+        },
+        query: {},
+      }),
+      "bought Coimbatore sago",
+      catalog,
+    );
+    const reply = validateCommandPlan(
+      plan({
+        intent: "UPDATE_PENDING_DRAFT",
+        input: { contactName: "Rathina Stores", unit: "bag" },
+        query: {},
+      }),
+      "from Rathina Stores, in bags",
+      { ...catalog, context: { pendingCatalogAction: first.catalogAction } },
+    );
+    expect(reply.catalogAction).toMatchObject({
+      kind: "supplier",
+      input: { name: "Rathina Stores" },
+      productInput: {
+        name: "Coimbatore sago",
+        unit: "bag",
+        quantity: 20,
+        unitPrice: "1500",
+      },
+    });
+  });
+  it.each([
+    "CREATE_SALE",
+    "RECORD_SUPPLIER_PAYMENT",
+    "GET_SUPPLIER_BALANCE",
+  ] as const)("does not offer to create a supplier for %s", (intent) => {
+    const result = validateCommandPlan(
+      plan({ intent, input: { contactName: "Rathina Stores" }, query: {} }),
+      "Rathina Stores",
+      catalog,
+    );
+    expect(result.catalogAction).toBeUndefined();
+    expect(result.clarification.length).toBeGreaterThan(0);
+  });
+  it("keeps genuinely ambiguous saved suppliers unresolved", () => {
+    const result = validateCommandPlan(
+      plan({ intent: "CREATE_PURCHASE", input: receipt, query: {} }),
+      "Rathina Stores",
+      {
+        ...catalog,
+        suppliers: [
+          { ...supplier, name: "Rathina Stores" },
+          { _id: "f".repeat(24), name: "Rathina Stores" },
+        ],
+      },
+    );
+    expect(result.catalogAction).toBeUndefined();
+    expect(result.candidates).toHaveLength(2);
+    expect(result.canPreview).toBe(false);
+  });
+});
 describe("empty aliases on stock and report responses", () => {
   it.each(["groq", "gemini"] as const)(
     "accepts the Tamil stock response from %s with no catalog fields or inherited draft",
@@ -515,12 +782,206 @@ describe("voice-created contacts and products", () => {
     expect(result.canPreview).toBe(false);
     expect(result.missing).toContain("weightGrams");
   });
+  it("keeps a stock receipt quantity separate from bag weight and the low-stock alert", () => {
+    const result = validateCommandPlan(
+      plan({
+        intent: "CREATE_PRODUCT",
+        query: {},
+        input: {
+          name: "Chennai sago",
+          unit: "bag",
+          weightGrams: 10000,
+          quantity: 20,
+        },
+      }),
+      "Chennai sago,10kg,20 bags",
+      catalog,
+    );
+    expect(result.canPreview).toBe(true);
+    expect(result.catalogAction?.input).toMatchObject({
+      name: "Chennai sago",
+      unit: "bag",
+      weightGrams: 10000,
+      quantity: 20,
+      lowStockQuantity: 10,
+    });
+    expect(result.input).toEqual({});
+    const corrected = validateCommandPlan(
+      plan({
+        intent: "UPDATE_PENDING_DRAFT",
+        query: {},
+        input: { weightGrams: 12000 },
+      }),
+      "12 kg per bag",
+      {
+        ...catalog,
+        context: { pendingCatalogAction: result.catalogAction },
+      },
+    );
+    expect(corrected.catalogAction?.input).toMatchObject({
+      quantity: 20,
+      weightGrams: 12000,
+    });
+  });
+  it("preserves a requested quantity while asking for a missing product weight", () => {
+    const result = validateCommandPlan(
+      plan({
+        intent: "CREATE_PRODUCT",
+        query: {},
+        input: { name: "Demo Rice", unit: "bag", quantity: 20 },
+      }),
+      "Demo Rice 20 bags",
+      catalog,
+    );
+    expect(result.canPreview).toBe(false);
+    expect(result.catalogAction?.input.quantity).toBe(20);
+    expect(
+      catalogVoiceQuestion(result.catalogAction!, result.missing, [])?.field,
+    ).toBe("weightGrams");
+  });
+  it.each(["CREATE_CUSTOMER", "CREATE_SUPPLIER"] as const)(
+    "rejects a product stock quantity under %s",
+    (intent) => {
+      expect(() =>
+        validateCommandPlan(
+          plan({ intent, query: {}, input: { name: "Demo", quantity: 20 } }),
+          "add entry",
+          catalog,
+        ),
+      ).toThrow();
+    },
+  );
+  it("keeps the new product's stated purchase price through quantity and weight clarification", () => {
+    const first = validateCommandPlan(
+      plan({
+        intent: "CREATE_PRODUCT",
+        query: {},
+        input: {
+          name: "நேபாள் ஜவ்வரிசி",
+          unit: "bag",
+          unitPrice: "100",
+          quantity: 20,
+          quantityOptions: [10, 20],
+        },
+      }),
+      "new product 10 bags, 100 per bag, 20 bags",
+      catalog,
+    );
+    expect(first.canPreview).toBe(false);
+    expect(first.catalogAction?.input.unitPrice).toBe("100");
+    expect(first.catalogAction?.input.quantity).toBeUndefined();
+    expect(first.catalogAction?.input.weightGrams).toBeUndefined();
+    const question = catalogVoiceQuestion(
+      first.catalogAction!,
+      first.missing,
+      first.clarification,
+    );
+    expect(question?.field).toBe("quantity");
+    expect(question?.choices).toEqual([
+      { value: "10", label: "10 bags", speechLabelTamil: "10 மூட்டைகள்" },
+      { value: "20", label: "20 bags", speechLabelTamil: "20 மூட்டைகள்" },
+    ]);
+    const resolved = validateCommandPlan(
+      plan({
+        intent: "UPDATE_PENDING_DRAFT",
+        query: {},
+        input: { quantity: 20 },
+      }),
+      "20 bags",
+      { ...catalog, context: { pendingCatalogAction: first.catalogAction } },
+    );
+    expect(resolved.catalogAction?.input).toMatchObject({
+      quantity: 20,
+      unitPrice: "100",
+    });
+    expect(resolved.catalogAction?.input.quantityOptions).toBeUndefined();
+    expect(
+      catalogVoiceQuestion(resolved.catalogAction!, resolved.missing, [])
+        ?.field,
+    ).toBe("weightGrams");
+    const complete = validateCommandPlan(
+      plan({
+        intent: "UPDATE_PENDING_DRAFT",
+        query: {},
+        input: { weightGrams: 25000 },
+      }),
+      "25 kilo per bag",
+      { ...catalog, context: { pendingCatalogAction: resolved.catalogAction } },
+    );
+    expect(complete.canPreview).toBe(true);
+    expect(complete.catalogAction?.input).toMatchObject({
+      quantity: 20,
+      unitPrice: "100",
+      weightGrams: 25000,
+      lowStockQuantity: 10,
+    });
+    expect(complete.input).toEqual({});
+  });
+  it("does not clear conflicting counts just because a different missing detail was answered", () => {
+    const action = {
+      kind: "product" as const,
+      input: {
+        name: "Rice",
+        unit: "bag",
+        unitPrice: "100",
+        quantityOptions: [10, 20],
+      },
+    };
+    const reply = validateCommandPlan(
+      plan({
+        intent: "UPDATE_PENDING_DRAFT",
+        query: {},
+        input: { weightGrams: 25000 },
+      }),
+      "25 kg per bag",
+      { ...catalog, context: { pendingCatalogAction: action } },
+    );
+    expect(reply.canPreview).toBe(false);
+    expect(reply.catalogAction?.input.quantity).toBeUndefined();
+    expect(
+      catalogVoiceQuestion(reply.catalogAction!, reply.missing, [])?.field,
+    ).toBe("quantity");
+  });
+  it("asks for a quantity when a proposed product purchase supplies only a price", () => {
+    const reply = validateCommandPlan(
+      plan({
+        intent: "CREATE_PRODUCT",
+        query: {},
+        input: {
+          name: "Rice",
+          unit: "bag",
+          weightGrams: 25000,
+          unitPrice: "100",
+        },
+      }),
+      "new Rice 25kg bags, 100 each",
+      catalog,
+    );
+    expect(reply.canPreview).toBe(false);
+    expect(reply.missing).toContain("quantity");
+    expect(
+      catalogVoiceQuestion(reply.catalogAction!, reply.missing, [])?.field,
+    ).toBe("quantity");
+  });
+  it.each(["CREATE_CUSTOMER", "CREATE_SUPPLIER"] as const)(
+    "does not accept purchase prices or count options for %s",
+    (intent) => {
+      for (const extra of [{ unitPrice: "100" }, { quantityOptions: [10, 20] }])
+        expect(() =>
+          validateCommandPlan(
+            plan({ intent, query: {}, input: { name: "Demo", ...extra } }),
+            "add contact",
+            catalog,
+          ),
+        ).toThrow();
+    },
+  );
   it("rejects mixed catalog/financial actions and preserves a fresh unrelated command", () => {
     expect(() =>
       validateCommandPlan(
         plan({
           intent: "CREATE_PRODUCT",
-          input: { name: "Rice", quantity: 100 },
+          input: { name: "Rice", amount: "100" },
           query: {},
         }),
         "add rice",

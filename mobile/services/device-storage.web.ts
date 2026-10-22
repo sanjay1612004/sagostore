@@ -1,6 +1,7 @@
 // Browser preview credentials live only in memory, never in localStorage.
 const memory = new Map<string, string>();
 const preferenceKey = "tamiltrade.preferences";
+export const sessionStorageOptions = {};
 export async function getItemAsync(key: string): Promise<string | null> {
   if (key === preferenceKey && typeof window !== "undefined") {
     try {
@@ -11,7 +12,11 @@ export async function getItemAsync(key: string): Promise<string | null> {
   }
   return memory.get(key) ?? null;
 }
-export async function setItemAsync(key: string, value: string): Promise<void> {
+export async function setItemAsync(
+  key: string,
+  value: string,
+  _options?: unknown,
+): Promise<void> {
   memory.set(key, value);
   if (key === preferenceKey && typeof window !== "undefined") {
     try {

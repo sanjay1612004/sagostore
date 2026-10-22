@@ -9,26 +9,29 @@ import {
   LoadingSkeleton,
   EmptyState,
 } from "../components/ui";
-import { api } from "../services/api";
+import { api, queryClient } from "../services/api";
+import { useSession } from "../store/session";
 import { useTheme } from "../theme";
 type Session = {
   _id: string;
   device: string;
   createdAt: string;
   expiresAt: string;
+  current: boolean;
+  phoneUnlock: boolean;
 };
 export default function Security() {
   const c = useTheme();
   const q = useQuery({
-    queryKey: ["sessions"],
+    queryKey: ["auth", "sessions"],
     queryFn: () => api<Session[]>("/auth/sessions"),
   });
   const [error, setError] = useState<unknown>(),
     [busy, setBusy] = useState<string | null>(null);
   return (
     <Screen
-      title="Security & sessions"
-      subtitle="Review and revoke devices signed in to your account."
+      title="Connected devices"
+      subtitle="Disconnect a device to remove its access to your account."
       back
     >
       <ErrorNotice error={q.error ?? error} retry={() => void q.refetch()} />
@@ -39,21 +42,30 @@ export default function Security() {
           <Card key={s._id}>
             <T size={18} weight="bold">
               {s.device}
+              {s.current ? " · This device" : ""}
             </T>
             <T color={c.muted} size={12}>
-              Signed in {new Date(s.createdAt).toLocaleString()}
+              Connected {new Date(s.createdAt).toLocaleString()}
             </T>
             <T color={c.muted} size={12}>
-              Expires {new Date(s.expiresAt).toLocaleDateString()}
+              {s.phoneUnlock
+                ? "Phone unlock enabled"
+                : `Session expires ${new Date(s.expiresAt).toLocaleDateString()}`}
             </T>
             <Button
-              title="Revoke session"
+              title="Disconnect"
               variant="danger"
               busy={busy === s._id}
+              disabled={!!busy}
               onPress={() => {
                 setBusy(s._id);
                 void api(`/auth/sessions/${s._id}`, { method: "DELETE" })
-                  .then(() => q.refetch())
+                  .then(async () => {
+                    if (s.current) {
+                      queryClient.clear();
+                      await useSession.getState().clear();
+                    } else await q.refetch();
+                  })
                   .catch(setError)
                   .finally(() => setBusy(null));
               }}
@@ -63,7 +75,7 @@ export default function Security() {
       ) : (
         <EmptyState
           title="No active sessions"
-          description="Sign in again to continue."
+          description="Connect this phone again to continue."
         />
       )}
     </Screen>

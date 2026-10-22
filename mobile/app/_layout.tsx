@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { AppState, View, ActivityIndicator, Platform } from "react-native";
 import { AppModal as Modal } from "../components/app-modal";
 import { Stack, router, useSegments } from "expo-router";
@@ -11,9 +11,10 @@ import { Inter_400Regular } from "@expo-google-fonts/inter/400Regular";
 import { Inter_500Medium } from "@expo-google-fonts/inter/500Medium";
 import { Inter_700Bold } from "@expo-google-fonts/inter/700Bold";
 import { NotoSansTamil_400Regular } from "@expo-google-fonts/noto-sans-tamil/400Regular";
-import * as LocalAuthentication from "expo-local-authentication";
-import { queryClient, restoreSession } from "../services/api";
-import { useSession } from "../store/session";
+import { queryClient, restoreSession, post } from "../services/api";
+import { useSession, type Credentials } from "../store/session";
+import * as SecureStore from "../services/device-storage";
+import { unlockPhone, lockPhoneOnAppState } from "../services/phone-security";
 import { loadPreferences, usePreferences } from "../store/preferences";
 import { useTheme } from "../theme";
 import { Button, ErrorNotice, Screen, T } from "../components/ui";
@@ -34,47 +35,105 @@ export default function RootLayout() {
   const c = useTheme(),
     theme = usePreferences((s) => s.theme),
     reducedMotion = useNavigationReducedMotion();
-  const { user, ready } = useSession();
+  const { user, ready, phoneUnlocked } = useSession();
   const segments = useSegments();
-  const [error, setError] = useState<unknown>(),
-    [locked, setLocked] = useState(false);
+  const [error, setError] = useState<unknown>();
+  const [hasConnection, setHasConnection] = useState(false);
+  const [booted, setBooted] = useState(false);
+  const [unlockBusy, setUnlockBusy] = useState(false);
+  const [unlockError, setUnlockError] = useState<unknown>();
+  const [foreground, setForeground] = useState(0);
+  const autoPrompted = useRef(false);
+  const booting = useRef(false);
+  const locked =
+    Platform.OS !== "web" &&
+    !phoneUnlocked &&
+    ((hasConnection && !ready) || !!user);
   const bootstrap = async () => {
+    if (booting.current) return;
+    booting.current = true;
     setError(undefined);
     try {
       await loadPreferences();
+      const stored = await SecureStore.getItemAsync("tamiltrade.session");
+      setHasConnection(!!stored);
+      if (
+        Platform.OS !== "web" &&
+        stored &&
+        !useSession.getState().phoneUnlocked
+      )
+        return;
       await restoreSession();
-      setLocked(
-        usePreferences.getState().biometric && !!useSession.getState().user,
-      );
+      // Upgrade a previously signed-in phone after successful OS authentication.
+      // No account password is needed again on this phone.
+      if (Platform.OS !== "web" && useSession.getState().user) {
+        const current = await SecureStore.getItemAsync("tamiltrade.session");
+        if (current && !JSON.parse(current).phoneUnlock)
+          await useSession
+            .getState()
+            .setCredentials(await post<Credentials>("/auth/phone/trust", {}));
+      }
+      setHasConnection(!!useSession.getState().user);
     } catch (e) {
       setError(e);
+    } finally {
+      booting.current = false;
+      setBooted(true);
     }
   };
   useEffect(() => {
     void bootstrap();
     const sub = AppState.addEventListener("change", (state) => {
-      if (
-        state === "background" &&
-        usePreferences.getState().biometric &&
-        useSession.getState().user
-      )
-        setLocked(true);
+      if (state === "active") setForeground((value) => value + 1);
+      lockPhoneOnAppState(state);
     });
     return () => sub.remove();
   }, []);
   useEffect(() => {
-    if (!ready || !fonts || error || locked) return;
+    if (ready && !user && !booting.current) setHasConnection(false);
+  }, [user, ready]);
+  useEffect(() => {
+    if (!booted || !ready || !fonts || error || locked) return;
     const inAuth = segments[0] === "(auth)";
     if (!user && !inAuth) router.replace("/(auth)/login");
+    else if (
+      !user &&
+      Platform.OS !== "web" &&
+      inAuth &&
+      segments[1] !== "login"
+    )
+      router.replace("/(auth)/login");
     else if (user && inAuth) router.replace("/(tabs)");
-  }, [user, ready, segments, fonts, error, locked]);
+  }, [user, ready, segments, fonts, error, locked, booted]);
   const unlock = async () => {
-    const result = await LocalAuthentication.authenticateAsync({
-      promptMessage: `Unlock ${STORE_NAME}`,
-      cancelLabel: "Cancel",
-    });
-    if (result.success) setLocked(false);
+    if (unlockBusy) return;
+    setUnlockBusy(true);
+    setUnlockError(undefined);
+    try {
+      if (await unlockPhone()) {
+        if (!useSession.getState().user) await bootstrap();
+      }
+    } catch (e) {
+      setUnlockError(e);
+    } finally {
+      setUnlockBusy(false);
+    }
   };
+  useEffect(() => {
+    if (!locked) {
+      autoPrompted.current = false;
+      return;
+    }
+    if (
+      booted &&
+      fonts &&
+      !autoPrompted.current &&
+      AppState.currentState === "active"
+    ) {
+      autoPrompted.current = true;
+      void unlock();
+    }
+  }, [locked, booted, fonts, foreground]);
   const shell = (children: React.ReactNode) => (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: c.bg }}>
       <SafeAreaProvider>
@@ -93,13 +152,22 @@ export default function RootLayout() {
       >
         <ErrorNotice error={error} retry={() => void bootstrap()} />
         <Button
-          title="Sign in with another account"
+          title={
+            Platform.OS === "web"
+              ? "Sign in with another account"
+              : "Connect this phone again"
+          }
           variant="secondary"
           onPress={() => {
             void useSession
               .getState()
               .clear()
-              .then(() => setError(undefined));
+              .then(() => {
+                queryClient.clear();
+                setHasConnection(false);
+                setError(undefined);
+              })
+              .catch(setError);
           }}
         />
       </Screen>,
@@ -110,7 +178,26 @@ export default function RootLayout() {
         <T>Fonts could not load. Restart the app to try again.</T>
       </View>,
     );
-  if (!fonts || !ready)
+  const lockContent = (
+    <Screen
+      maxWidth={460}
+      title="Welcome back"
+      action={
+        <T size={11} color={c.muted}>
+          LOCKED
+        </T>
+      }
+      subtitle="Unlock with your phone’s fingerprint, face or screen-lock PIN."
+    >
+      <View style={{ alignItems: "center", paddingVertical: 28 }}>
+        <StoreIcon size={96} />
+      </View>
+      <ErrorNotice error={unlockError} />
+      <Button title="Unlock" busy={unlockBusy} onPress={() => void unlock()} />
+    </Screen>
+  );
+  if (fonts && booted && locked && !ready) return shell(lockContent);
+  if (!fonts || !booted || !ready)
     return shell(
       <View
         style={{
@@ -131,37 +218,36 @@ export default function RootLayout() {
   const lockScreen =
     locked && user ? (
       <Modal visible presentationStyle="fullScreen">
-        <Screen
-          title="Your business. Secured."
-          subtitle="Unlock to continue your session."
-        >
-          <Button
-            title={`Unlock ${STORE_NAME}`}
-            onPress={() => void unlock()}
-          />
-        </Screen>
+        {lockContent}
       </Modal>
     ) : null;
   return shell(
     <>
-      <Stack
-        screenLayout={
-          Platform.OS === "web"
-            ? ({ children }) => (
-                <WebStackTransition>{children}</WebStackTransition>
-              )
-            : undefined
-        }
-        screenOptions={{
-          headerShown: false,
-          title: STORE_NAME,
-          contentStyle: { backgroundColor: c.bg },
-          animation: reducedMotion ? "none" : "fade_from_bottom",
-          animationDuration: navigationDuration,
-        }}
+      <View
+        style={{ flex: 1, opacity: locked ? 0 : 1 }}
+        pointerEvents={locked ? "none" : "auto"}
+        accessibilityElementsHidden={locked}
+        importantForAccessibility={locked ? "no-hide-descendants" : "auto"}
       >
-        <Stack.Screen name="(tabs)" />
-      </Stack>
+        <Stack
+          screenLayout={
+            Platform.OS === "web"
+              ? ({ children }) => (
+                  <WebStackTransition>{children}</WebStackTransition>
+                )
+              : undefined
+          }
+          screenOptions={{
+            headerShown: false,
+            title: STORE_NAME,
+            contentStyle: { backgroundColor: c.bg },
+            animation: reducedMotion ? "none" : "fade_from_bottom",
+            animationDuration: navigationDuration,
+          }}
+        >
+          <Stack.Screen name="(tabs)" />
+        </Stack>
+      </View>
       {lockScreen}
     </>,
   );

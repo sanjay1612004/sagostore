@@ -68,8 +68,15 @@ export async function restoreSession() {
       "CONFIGURATION",
       apiConfiguration.error ?? "Configure your business server address.",
     );
-  if (await SecureStore.getItemAsync("tamiltrade.session")) await renew();
-  else useSession.setState({ ready: true });
+  if (await SecureStore.getItemAsync("tamiltrade.session")) {
+    if (Platform.OS !== "web" && !useSession.getState().phoneUnlocked)
+      throw new ApiError(401, "PHONE_LOCKED", "Unlock your phone to continue.");
+    try {
+      await renew();
+    } catch (error) {
+      if (!(error instanceof ApiError && error.status === 401)) throw error;
+    }
+  } else useSession.setState({ ready: true });
 }
 export async function api<T>(
   endpoint: string,
@@ -130,6 +137,7 @@ export async function api<T>(
       "/auth/register",
       "/auth/refresh",
       "/auth/recover",
+      "/auth/phone/connect",
     ].includes(endpoint)
   ) {
     refreshPromise ??= renew().finally(() => {

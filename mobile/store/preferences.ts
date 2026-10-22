@@ -1,24 +1,19 @@
-import { Platform } from "react-native";
 import { create } from "zustand";
 import * as SecureStore from "../services/device-storage";
 type Preferences = {
   theme: "dark" | "light";
   language: "ta" | "en";
-  biometric: boolean;
-  set: (
-    v: Partial<Pick<Preferences, "theme" | "language" | "biometric">>,
-  ) => Promise<void>;
+  set: (v: Partial<Pick<Preferences, "theme" | "language">>) => Promise<void>;
 };
 export const usePreferences = create<Preferences>((set, get) => ({
   theme: "dark",
   language: "ta",
-  biometric: false,
   set: async (v) => {
     set(v);
-    const { theme, language, biometric } = get();
+    const { theme, language } = get();
     await SecureStore.setItemAsync(
       "tamiltrade.preferences",
-      JSON.stringify({ theme, language, biometric }),
+      JSON.stringify({ theme, language }),
     );
   },
 }));
@@ -34,7 +29,6 @@ export async function loadPreferences() {
         usePreferences.setState({
           theme: v.theme,
           language: v.language,
-          biometric: Platform.OS !== "web" && v.biometric === true,
         });
     } catch {
       /* defaults remain usable */

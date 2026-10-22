@@ -67,6 +67,20 @@ export const Session = mongoose.model(
       expiresAt: { type: Date, required: true },
       revokedAt: Date,
       device: { type: String, default: "Mobile" },
+      phoneUnlock: { type: Boolean, default: false },
+    },
+    opts,
+  ).index({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
+);
+export const DeviceConnection = mongoose.model(
+  "DeviceConnection",
+  new Schema(
+    {
+      ...scoped,
+      userId: { type: Schema.Types.ObjectId, required: true, index: true },
+      issuerSessionId: Schema.Types.ObjectId,
+      hash: { type: String, unique: true, required: true, select: false },
+      expiresAt: { type: Date, required: true },
     },
     opts,
   ).index({ expiresAt: 1 }, { expireAfterSeconds: 0 }),

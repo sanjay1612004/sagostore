@@ -2323,7 +2323,7 @@ Do not claim a phase is complete unless its acceptance tests pass.
 
 ---
 
-# 37. EXACT DELIVERY INSTRUCTIONS TO AI CODING AGENT
+# 37. EXACT DELIVERY INSTRUCTIONS TO AI `CODING AGENT
 
 This section is mandatory.
 

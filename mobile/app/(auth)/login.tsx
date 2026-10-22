@@ -1,5 +1,6 @@
 import React, { useState } from "react";
-import { Pressable, View } from "react-native";
+import { Platform, Pressable, View } from "react-native";
+import { PhoneConnect } from "../../components/phone-connect";
 import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { loginSchema } from "@tamiltrade/shared";
@@ -21,6 +22,9 @@ import { useSession, type Credentials } from "../../store/session";
 import { useTheme } from "../../theme";
 import { STORE_NAME } from "../../config/brand";
 export default function Login() {
+  return Platform.OS === "web" ? <BrowserLogin /> : <PhoneConnect />;
+}
+function BrowserLogin() {
   const c = useTheme();
   const [visible, setVisible] = useState(false),
     [error, setError] = useState<unknown>();
@@ -65,7 +69,10 @@ export default function Login() {
         <T size={21} weight="bold">
           Welcome back
         </T>
-        <T color={c.muted}>Sign in to your business account.</T>
+        <T color={c.muted}>
+          Sign in to your business account in this browser. The mobile app uses
+          your phone’s fingerprint, face or PIN.
+        </T>
         <Controller
           control={control}
           name="email"

@@ -16,6 +16,7 @@ import {
   Business,
   User,
   Session,
+  DeviceConnection,
   Recovery,
   Audit,
   type UserDoc,
@@ -48,6 +49,7 @@ const publicUser = (user: UserDoc & { _id: mongoose.Types.ObjectId }) => ({
 function tokens(
   user: UserDoc & { _id: mongoose.Types.ObjectId },
   sessionId: string,
+  phoneUnlock = false,
 ) {
   const access = jwt.sign(
     { bid: String(user.businessId), sid: sessionId },
@@ -65,29 +67,66 @@ function tokens(
     env.JWT_REFRESH_SECRET,
     {
       subject: String(user._id),
-      expiresIn: "30d",
+      expiresIn: phoneUnlock ? "3650d" : "30d",
       issuer: "tamiltrade",
       audience: "tamiltrade-refresh",
       algorithm: "HS256",
     },
   );
-  return { accessToken: access, refreshToken: refresh, user: publicUser(user) };
+  return {
+    accessToken: access,
+    refreshToken: refresh,
+    user: publicUser(user),
+    phoneUnlock,
+  };
 }
+const sessionExpiry = (phoneUnlock: boolean) =>
+  new Date(Date.now() + (phoneUnlock ? 3650 : 30) * 86400000);
 async function createSession(
   user: UserDoc & { _id: mongoose.Types.ObjectId },
   device: string,
+  phoneUnlock = false,
+  transaction?: mongoose.ClientSession,
 ) {
   const sessionId = new mongoose.Types.ObjectId();
-  const result = tokens(user, String(sessionId));
-  await Session.create({
-    _id: sessionId,
+  const result = tokens(user, String(sessionId), phoneUnlock);
+  await Session.create(
+    [
+      {
+        _id: sessionId,
+        businessId: user.businessId,
+        userId: user._id,
+        tokenHash: hashToken(result.refreshToken),
+        expiresAt: sessionExpiry(phoneUnlock),
+        device,
+        phoneUnlock,
+      },
+    ],
+    { session: transaction },
+  );
+  return result;
+}
+// A device unlock result never establishes server identity by itself.
+export async function issueConnectionCode(
+  user: UserDoc & { _id: mongoose.Types.ObjectId },
+  issuerSessionId?: string,
+) {
+  const code = randomBytes(16).toString("hex").toUpperCase();
+  const expiresAt = new Date(Date.now() + 10 * 60000);
+  await DeviceConnection.create({
     businessId: user.businessId,
     userId: user._id,
-    tokenHash: hashToken(result.refreshToken),
-    expiresAt: new Date(Date.now() + 30 * 86400000),
-    device,
+    issuerSessionId,
+    hash: hashToken(code),
+    expiresAt,
   });
-  return result;
+  await Audit.create({
+    businessId: user.businessId,
+    userId: user._id,
+    action: "DEVICE_CONNECTION_CODE_CREATED",
+    entityId: user._id,
+  });
+  return { code: code.match(/.{4}/g)!.join("-"), expiresAt };
 }
 export const authenticate: RequestHandler = async (req, _res, next) => {
   try {
@@ -158,6 +197,79 @@ export const authorize =
       );
   };
 export const authRouter = Router();
+authRouter.use((_req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  next();
+});
+authRouter.post("/phone/connect", async (req, res) => {
+  const { code, device } = z
+    .object({
+      code: z
+        .string()
+        .max(80)
+        .transform((s) => s.replace(/[\s-]/g, "").toUpperCase())
+        .pipe(
+          z.string().regex(/^[A-F\d]{32}$/, "Enter the full connection code"),
+        ),
+      device: z.string().trim().min(1).max(100).default("Phone"),
+    })
+    .strict()
+    .parse(req.body);
+  const result = await mongoose.connection.transaction(async (session) => {
+    const connection = await DeviceConnection.findOneAndDelete(
+      {
+        hash: hashToken(code),
+        expiresAt: { $gt: new Date() },
+      },
+      { session },
+    );
+    assert(
+      connection,
+      401,
+      "CONNECTION_INVALID",
+      "Connection code is invalid, expired or already used. Ask for a new code.",
+    );
+    if (connection.issuerSessionId) {
+      const issuer = await Session.exists({
+        _id: connection.issuerSessionId,
+        userId: connection.userId,
+        revokedAt: null,
+        expiresAt: { $gt: new Date() },
+      }).session(session);
+      assert(
+        issuer,
+        401,
+        "CONNECTION_INVALID",
+        "This connection is no longer available. Ask for a new code.",
+      );
+    }
+    const user = await User.findOne({
+      _id: connection.userId,
+      businessId: connection.businessId,
+      active: true,
+    }).session(session);
+    assert(
+      user,
+      401,
+      "CONNECTION_INVALID",
+      "This connection is no longer available. Ask the business owner for help.",
+    );
+    const credentials = await createSession(user, device, true, session);
+    await Audit.create(
+      [
+        {
+          businessId: user.businessId,
+          userId: user._id,
+          action: "PHONE_CONNECTED",
+          entityId: user._id,
+        },
+      ],
+      { session },
+    );
+    return credentials;
+  });
+  res.status(201).json(result);
+});
 authRouter.post("/register", async (req, res) => {
   assert(
     env.REGISTRATION_ENABLED,
@@ -244,7 +356,12 @@ authRouter.post("/refresh", async (req, res) => {
     "SESSION_EXPIRED",
     "Please sign in again",
   );
-  const result = tokens(user, claims.sid);
+  const currentSession = await Session.findOne({
+    _id: claims.sid,
+    userId: user._id,
+  }).lean();
+  const phoneUnlock = currentSession?.phoneUnlock === true;
+  const result = tokens(user, claims.sid, phoneUnlock);
   const session = await Session.findOneAndUpdate(
     {
       _id: claims.sid,
@@ -256,7 +373,7 @@ authRouter.post("/refresh", async (req, res) => {
     {
       $set: {
         tokenHash: hashToken(result.refreshToken),
-        expiresAt: new Date(Date.now() + 30 * 86400000),
+        expiresAt: sessionExpiry(phoneUnlock),
       },
     },
   );
@@ -306,10 +423,47 @@ authRouter.post("/recover", async (req, res) => {
       { $set: { revokedAt: new Date() } },
       { session },
     );
+    await DeviceConnection.deleteMany({ userId: recovery.userId }, { session });
   });
   res.json({ message: "Password updated. Please sign in." });
 });
 authRouter.use(authenticate);
+authRouter.post("/phone/connection-code", async (req, res) => {
+  res
+    .status(201)
+    .json(
+      await issueConnectionCode(
+        (await User.findById(req.auth.userId))!,
+        req.auth.sessionId,
+      ),
+    );
+});
+authRouter.post("/phone/trust", async (req, res) => {
+  const user = (await User.findById(req.auth.userId))!;
+  const result = tokens(user, req.auth.sessionId, true);
+  const session = await Session.findOneAndUpdate(
+    {
+      _id: req.auth.sessionId,
+      userId: user._id,
+      revokedAt: null,
+      expiresAt: { $gt: new Date() },
+    },
+    {
+      $set: {
+        phoneUnlock: true,
+        tokenHash: hashToken(result.refreshToken),
+        expiresAt: sessionExpiry(true),
+      },
+    },
+  );
+  assert(
+    session,
+    401,
+    "SESSION_EXPIRED",
+    "Connect this phone again using a new connection code.",
+  );
+  res.json(result);
+});
 authRouter.get("/me", async (req, res) => {
   res.json(publicUser((await User.findById(req.auth.userId))!));
 });
@@ -318,30 +472,43 @@ authRouter.post("/logout", async (req, res) => {
     { _id: req.auth.sessionId },
     { $set: { revokedAt: new Date() } },
   );
+  await DeviceConnection.deleteMany({
+    userId: req.auth.userId,
+    issuerSessionId: req.auth.sessionId,
+  });
   res.sendStatus(204);
 });
 authRouter.get("/sessions", async (req, res) => {
+  const sessions = await Session.find({
+    userId: req.auth.userId,
+    revokedAt: null,
+    expiresAt: { $gt: new Date() },
+  })
+    .select("device phoneUnlock createdAt expiresAt")
+    .lean();
   res.json(
-    await Session.find({
-      userId: req.auth.userId,
-      revokedAt: null,
-      expiresAt: { $gt: new Date() },
-    })
-      .select("device createdAt expiresAt")
-      .lean(),
+    sessions.map((session) => ({
+      ...session,
+      current: String(session._id) === req.auth.sessionId,
+    })),
   );
 });
 authRouter.delete("/sessions/:id", async (req, res) => {
+  const id = z
+    .string()
+    .regex(/^[a-f\d]{24}$/i)
+    .parse(req.params.id);
   await Session.updateOne(
     {
-      _id: z
-        .string()
-        .regex(/^[a-f\d]{24}$/i)
-        .parse(req.params.id),
+      _id: id,
       userId: req.auth.userId,
     },
     { $set: { revokedAt: new Date() } },
   );
+  await DeviceConnection.deleteMany({
+    userId: req.auth.userId,
+    issuerSessionId: id,
+  });
   res.sendStatus(204);
 });
 authRouter.get("/staff", authorize("owner"), async (req, res) => {
@@ -398,6 +565,7 @@ authRouter.patch("/staff/:id", authorize("owner"), async (req, res) => {
       { $set: { revokedAt: new Date() } },
       { session },
     );
+    await DeviceConnection.deleteMany({ userId }, { session });
     await Audit.create(
       [
         {

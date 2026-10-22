@@ -49,11 +49,24 @@ export const voiceCatalogFieldsSchema = z.strictObject({
   unit: z.string().trim().max(30).optional(),
   weightGrams: z.number().int().positive().max(1000000).optional(),
   lowStockQuantity: z.number().int().min(0).max(1000000).optional(),
+  // Requested receipt quantity, carried into a separate reviewed stock purchase.
+  // This is not a product attribute or the low-stock alert threshold.
+  quantity: z.number().int().positive().max(1000000).optional(),
+  unitPrice: money.optional(),
+  quantityOptions: z
+    .array(z.number().int().positive().max(1000000))
+    .min(2)
+    .max(5)
+    .optional(),
 });
 export type VoiceCatalogFields = z.infer<typeof voiceCatalogFieldsSchema>;
 export type VoiceCatalogAction = {
   kind: "customer" | "supplier" | "product";
   input: VoiceCatalogFields;
+  // Preserve a receipt while its newly named product is reviewed and created.
+  purchaseInput?: Partial<TradeInput>;
+  // Product setup to resume after approving a new supplier for this receipt.
+  productInput?: VoiceCatalogFields;
   reviewId?: string;
   ready?: boolean;
 };

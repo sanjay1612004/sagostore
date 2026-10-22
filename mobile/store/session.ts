@@ -13,27 +13,35 @@ export type Credentials = {
   accessToken: string;
   refreshToken: string;
   user: User;
+  phoneUnlock?: boolean;
 };
 export const useSession = create<{
   user: User | null;
   accessToken: string | null;
   ready: boolean;
+  phoneUnlocked: boolean;
   setCredentials: (data: Credentials) => Promise<void>;
   clear: () => Promise<void>;
 }>((set) => ({
   user: null,
   accessToken: null,
   ready: false,
+  phoneUnlocked: false,
   setCredentials: async (data) => {
     await SecureStore.setItemAsync(
       "tamiltrade.session",
-      JSON.stringify({ refreshToken: data.refreshToken, user: data.user }),
+      JSON.stringify({
+        refreshToken: data.refreshToken,
+        user: data.user,
+        phoneUnlock: data.phoneUnlock === true,
+      }),
+      SecureStore.sessionStorageOptions,
     );
     set({ user: data.user, accessToken: data.accessToken, ready: true });
   },
   clear: async () => {
     await SecureStore.deleteItemAsync("tamiltrade.session");
-    set({ user: null, accessToken: null, ready: true });
+    set({ user: null, accessToken: null, ready: true, phoneUnlocked: false });
   },
 }));
 export const hasPermission = (p: Permission) => {

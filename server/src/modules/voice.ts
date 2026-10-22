@@ -11,6 +11,8 @@ import {
   contactSchema,
   productSchema,
   type VoiceCatalogAction,
+  type TradeInput,
+  type Entity,
 } from "@tamiltrade/shared";
 import { env } from "../config/env.js";
 import { assert } from "../shared/errors.js";
@@ -24,7 +26,11 @@ import {
   QueueState,
   Audit,
 } from "./models.js";
-import { interpretCommand, type CommandContext } from "./command-ai.js";
+import {
+  interpretCommand,
+  validateCommandPlan,
+  type CommandContext,
+} from "./command-ai.js";
 import { speechSettings } from "../shared/speech-settings.js";
 import { balance } from "./trading.js";
 import { paise } from "../shared/money.js";
@@ -38,9 +44,115 @@ import { authorize, type Principal } from "./auth.js";
 import {
   catalogVoiceQuestion,
   validateCatalogAction,
+  catalogHasStock,
 } from "./voice-catalog.js";
 import { nextVoiceQuestion, voiceSourceOptions } from "./voice-follow-up.js";
 import { voiceWorkerStatus } from "../shared/voice-worker-lease.js";
+
+function catalogContinuation(action: VoiceCatalogAction) {
+  const validated = validateCatalogAction(action.kind, action.input);
+  const question = catalogVoiceQuestion(action, validated.missing, []);
+  const followUp = question ? { id: randomUUID(), ...question } : undefined;
+  return {
+    intent: "UPDATE_PENDING_DRAFT",
+    input: {} as Partial<TradeInput>,
+    catalogAction: {
+      ...action,
+      input: validated.action.input,
+      ready: validated.valid && !followUp,
+    },
+    missing: validated.missing,
+    clarification: [],
+    candidates: [],
+    canPreview: validated.valid && !followUp,
+    followUp,
+    summary: undefined,
+  };
+}
+
+function purchaseContinuation(
+  input: Partial<TradeInput>,
+  suppliers: Entity[],
+  products: (Entity & { unit?: string; weightGrams?: number })[],
+) {
+  const catalog = { customers: [], suppliers, products };
+  const result = validateCommandPlan(
+    {
+      intent: "CREATE_PURCHASE",
+      input,
+      query: {},
+      candidateContactIds: [],
+      clarification: [],
+    },
+    "",
+    { ...catalog, context: {} },
+  );
+  const question = nextVoiceQuestion(result, catalog, []);
+  const product = products.find((item) => item._id === result.input.productId);
+  return {
+    ...result,
+    followUp: question ? { id: randomUUID(), ...question } : undefined,
+    summary: {
+      contactName: suppliers.find((item) => item._id === result.input.contactId)
+        ?.name,
+      productName: product?.name,
+      unit: product?.unit,
+      weightGrams: product?.weightGrams,
+    },
+  };
+}
+
+// Metadata creation never posts stock. Keep the spoken quantity in a purchase
+// draft, then ask for its supplier/cost through the existing voice review flow.
+function productStockEntry(
+  product: { _id: unknown; name: string; unit: string; weightGrams: number },
+  suppliers: { _id: unknown; name: string; aliases?: string[] }[],
+  stock?: { quantity?: number; unitPrice?: string },
+  pendingInput?: Partial<TradeInput>,
+) {
+  const entities = suppliers.map((supplier) => ({
+    ...supplier,
+    _id: String(supplier._id),
+  }));
+  const result = validateCommandPlan(
+    {
+      intent: "CREATE_PURCHASE",
+      input: {
+        delivery: "warehouse",
+        ...pendingInput,
+        ...stock,
+        productId: String(product._id),
+      },
+      query: {},
+      candidateContactIds: [],
+      clarification: [],
+    },
+    "",
+    {
+      customers: [],
+      suppliers: entities,
+      products: [{ ...product, _id: String(product._id) }],
+      context: pendingInput ? { pendingInput } : {},
+    },
+  );
+  const question = nextVoiceQuestion(
+    result,
+    { customers: [], suppliers: entities, products: [] },
+    [],
+  );
+  return {
+    ...result,
+    followUp: question ? { id: randomUUID(), ...question } : undefined,
+    summary: {
+      contactName: entities.find(
+        (supplier) => supplier._id === result.input.contactId,
+      )?.name,
+      productName: product.name,
+      unit: product.unit,
+      weightGrams: product.weightGrams,
+    },
+  };
+}
 export async function understand(
   auth: Pick<Principal, "businessId" | "userId">,
   text: string,
@@ -82,6 +194,57 @@ export async function understand(
         pendingQuestion: conversation.pendingQuestion,
       }
     : {};
+  const supplierApproval = context.pendingCatalogAction;
+  const approvingSupplier =
+    supplierApproval?.kind === "supplier" &&
+    supplierApproval.purchaseInput &&
+    supplierApproval.ready &&
+    supplierApproval.reviewId;
+  const approveSupplier = async () => {
+    assert(
+      approvingSupplier,
+      409,
+      "VOICE_REVIEW_CHANGED",
+      "There is no new supplier awaiting your approval.",
+    );
+    const saved = await confirmCatalog(auth, supplierApproval!.reviewId!);
+    assert(
+      saved.nextAction,
+      409,
+      "VOICE_REVIEW_CHANGED",
+      "This purchase has changed. Review the current details.",
+    );
+    return {
+      ...saved.nextAction,
+      summary: saved.nextAction.summary
+        ? { ...saved.nextAction.summary, sourceLabel: undefined }
+        : undefined,
+      answer: {
+        text: `${saved.name} added to your supplier list. Let’s continue the purchase.`,
+      },
+    };
+  };
+  const reply = text
+    .normalize("NFKC")
+    .trim()
+    .toLocaleLowerCase()
+    .replace(/[.!?]+$/u, "")
+    .trim();
+  if (
+    !selection.contactId &&
+    approvingSupplier &&
+    /^(yes|yes please|yes add it|yes add supplier|yes add to supplier list|add it|add supplier|ok|okay|sure|ஆம்|ஆமாம்|சரி|சேர்க்கவும்|aama|seri)$/u.test(
+      reply,
+    )
+  ) {
+    return approveSupplier();
+  }
+  const declineSupplier =
+    !selection.contactId &&
+    approvingSupplier &&
+    /^(no|no thanks|do not add|don't add|cancel|வேண்டாம்|இல்லை|vendam|illa)$/u.test(
+      reply,
+    );
   // Supply only references that still belong to this business and are posted.
   const selectedRecords = await Record.find({
     ...scope,
@@ -122,35 +285,53 @@ export async function understand(
           : [],
       )
     : [];
-  const result = await interpretCommand(
-    text,
-    {
-      customers: entities(customers),
-      suppliers: entities(suppliers),
-      products: entities(products),
-      context,
-      recentMessages: (conversation?.messages ?? [])
-        .slice(-4)
-        .map((message) => ({
-          text: String(message.text).slice(0, 400),
-          intent: String(message.intent),
-        })),
-      selectedContactId: selection.contactId,
-      sources,
-    },
-    {
-      apiKey: env.GROQ_API_KEY,
-      model: env.COMMAND_AI_MODEL,
-      timeoutMs: env.COMMAND_AI_TIMEOUT_MS,
-      gemini:
-        env.GEMINI_FALLBACK_ENABLED && env.GEMINI_API_KEY
-          ? {
-              apiKey: env.GEMINI_API_KEY,
-              model: env.GEMINI_COMMAND_AI_MODEL,
-            }
-          : undefined,
-    },
-  );
+  const result = declineSupplier
+    ? validateCommandPlan(
+        {
+          intent: "CANCEL_PENDING_ACTION",
+          input: {},
+          query: {},
+          candidateContactIds: [],
+          clarification: [],
+        },
+        text,
+        {
+          customers: entities(customers),
+          suppliers: entities(suppliers),
+          products: entities(products),
+          context,
+        },
+      )
+    : await interpretCommand(
+        text,
+        {
+          customers: entities(customers),
+          suppliers: entities(suppliers),
+          products: entities(products),
+          context,
+          recentMessages: (conversation?.messages ?? [])
+            .slice(-4)
+            .map((message) => ({
+              text: String(message.text).slice(0, 400),
+              intent: String(message.intent),
+            })),
+          selectedContactId: selection.contactId,
+          sources,
+        },
+        {
+          apiKey: env.GROQ_API_KEY,
+          model: env.COMMAND_AI_MODEL,
+          timeoutMs: env.COMMAND_AI_TIMEOUT_MS,
+          gemini:
+            env.GEMINI_FALLBACK_ENABLED && env.GEMINI_API_KEY
+              ? {
+                  apiKey: env.GEMINI_API_KEY,
+                  model: env.GEMINI_COMMAND_AI_MODEL,
+                }
+              : undefined,
+        },
+      );
+  if (result.intent === "APPROVE_PENDING_SUPPLIER") return approveSupplier();
   if (selection.contactId) {
     assert(
       result.intent === "GET_TRANSACTION_DETAILS",
@@ -198,6 +379,17 @@ export async function understand(
     "FORBIDDEN",
     "Your account does not have permission for this command",
   );
+  if (
+    result.catalogAction &&
+    (catalogHasStock(result.catalogAction) ||
+      result.catalogAction.purchaseInput)
+  )
+    assert(
+      user.role === "owner" || user.permissions.includes("purchases"),
+      403,
+      "FORBIDDEN",
+      "Your account does not have permission to receive stock.",
+    );
   let answer: unknown;
   if (result.clarification.length > 0) {
     // Resolve model uncertainty before reading any business answer.
@@ -417,6 +609,12 @@ export async function understand(
         productName: products.find(
           (product) => String(product._id) === result.input.productId,
         )?.name,
+        unit: products.find(
+          (product) => String(product._id) === result.input.productId,
+        )?.unit,
+        weightGrams: products.find(
+          (product) => String(product._id) === result.input.productId,
+        )?.weightGrams,
         sourceLabel:
           nextSources.find((source) => source._id === result.input.sourceId)
             ?.label ??
@@ -573,6 +771,293 @@ voiceRouter.post("/catalog/start", authorize("contacts"), async (req, res) => {
     followUp,
   });
 });
+voiceRouter.post("/stock/start", authorize("purchases"), async (req, res) => {
+  const { productId } = z.strictObject({ productId: id }).parse(req.body);
+  const product = await Product.findOne({
+    _id: productId,
+    businessId: req.auth.businessId,
+  }).lean();
+  assert(product, 404, "NOT_FOUND", "Product not found");
+  const suppliers = await Contact.find({
+    businessId: req.auth.businessId,
+    kind: "supplier",
+  })
+    .select("name aliases")
+    .sort({ name: 1 })
+    .limit(35)
+    .lean();
+  const result = productStockEntry(product, suppliers);
+  await Conversation.findOneAndUpdate(
+    { businessId: req.auth.businessId, userId: req.auth.userId },
+    {
+      $set: {
+        pendingInput: result.input,
+        pendingCatalogAction: null,
+        pendingQuestion: result.followUp,
+        pendingSourceIds: [],
+        expiresAt: new Date(Date.now() + 30 * 60000),
+      },
+    },
+    { upsert: true },
+  );
+  res.json(result);
+});
+async function confirmCatalog(
+  auth: Pick<Principal, "businessId" | "userId">,
+  reviewId: string,
+): Promise<{
+  reviewId: string;
+  kind: VoiceCatalogAction["kind"];
+  entityId: string;
+  name?: string;
+  stockEntry?: ReturnType<typeof productStockEntry>;
+  nextAction?:
+    | ReturnType<typeof catalogContinuation>
+    | ReturnType<typeof purchaseContinuation>;
+}> {
+  const saved = await mongoose.connection.transaction(async (session) => {
+    const scope = {
+      businessId: auth.businessId,
+      userId: auth.userId,
+    };
+    const conversation = await Conversation.findOne({
+      ...scope,
+      expiresAt: { $gt: new Date() },
+    }).session(session);
+    assert(
+      conversation,
+      409,
+      "VOICE_REVIEW_EXPIRED",
+      "This review has expired. Describe the entry again.",
+    );
+    const user = await User.findOne({
+      _id: auth.userId,
+      businessId: auth.businessId,
+      active: true,
+    }).session(session);
+    assert(
+      user && (user.role === "owner" || user.permissions.includes("contacts")),
+      403,
+      "FORBIDDEN",
+      "Your account does not have permission to add suppliers or products.",
+    );
+    const supplierContinuation = async (input: Partial<TradeInput>) => {
+      const supplierRows = await Contact.find({
+        businessId: auth.businessId,
+        kind: "supplier",
+      })
+        .select("name aliases")
+        .sort({ name: 1 })
+        .session(session)
+        .lean();
+      const productRows = await Product.find({ businessId: auth.businessId })
+        .select("name unit weightGrams")
+        .sort({ name: 1 })
+        .session(session)
+        .lean();
+      return purchaseContinuation(
+        input,
+        supplierRows.map((item) => ({ ...item, _id: String(item._id) })),
+        productRows.map((item) => ({ ...item, _id: String(item._id) })),
+      );
+    };
+    if (conversation.lastCatalogSave?.reviewId === reviewId) {
+      const previous = conversation.lastCatalogSave;
+      if (previous.nextAction) {
+        const pending = conversation.pendingCatalogAction as
+          VoiceCatalogAction | undefined;
+        const input = pending?.purchaseInput ?? conversation.pendingInput;
+        if (input?.kind !== "purchase" || input.contactId !== previous.entityId)
+          return { ...previous, nextAction: undefined };
+        const nextAction = pending
+          ? catalogContinuation(pending)
+          : await supplierContinuation(input);
+        return {
+          ...previous,
+          nextAction: {
+            ...nextAction,
+            followUp: conversation.pendingQuestion ?? undefined,
+          },
+        };
+      }
+      if (!previous.stockEntry) return previous;
+      // A retry must not rewind answers, restart a cancelled purchase, or
+      // offer a second purchase after the first was confirmed.
+      if (
+        conversation.pendingInput?.kind !== "purchase" ||
+        conversation.pendingInput.productId !== previous.entityId
+      )
+        return { ...previous, stockEntry: undefined };
+      const product = await Product.findOne({
+        businessId: auth.businessId,
+        _id: previous.entityId,
+      })
+        .session(session)
+        .lean();
+      assert(product, 404, "NOT_FOUND", "Product not found");
+      const suppliers = await Contact.find({
+        businessId: auth.businessId,
+        kind: "supplier",
+      })
+        .select("name aliases")
+        .sort({ name: 1 })
+        .limit(35)
+        .session(session)
+        .lean();
+      const stockEntry = productStockEntry(
+        product,
+        suppliers,
+        undefined,
+        conversation.pendingInput,
+      );
+      return {
+        ...previous,
+        stockEntry: {
+          ...stockEntry,
+          followUp: conversation.pendingQuestion ?? undefined,
+        },
+      };
+    }
+    const action = conversation.pendingCatalogAction as
+      VoiceCatalogAction | undefined;
+    assert(
+      action?.reviewId === reviewId,
+      409,
+      "VOICE_REVIEW_CHANGED",
+      "The details have changed. Review the latest entry before saving.",
+    );
+    const validated = validateCatalogAction(action.kind, action.input);
+    assert(
+      validated.valid && action.ready,
+      422,
+      "VOICE_DETAILS_REQUIRED",
+      "Answer the remaining question before saving.",
+    );
+    if (catalogHasStock(action) || action.purchaseInput) {
+      assert(
+        user.role === "owner" || user.permissions.includes("purchases"),
+        403,
+        "FORBIDDEN",
+        "Your account does not have permission to receive stock.",
+      );
+    }
+    const filter = {
+      businessId: auth.businessId,
+      name: validated.action.input.name,
+    };
+    const duplicate =
+      action.kind === "product"
+        ? await Product.exists(filter)
+            .collation({ locale: "en", strength: 2 })
+            .session(session)
+        : await Contact.exists({ ...filter, kind: action.kind })
+            .collation({ locale: "en", strength: 2 })
+            .session(session);
+    assert(
+      !duplicate,
+      409,
+      "VOICE_DUPLICATE",
+      "This name is already saved. Use the existing entry or change the name.",
+    );
+    let entityId: string;
+    let stockEntry: ReturnType<typeof productStockEntry> | undefined;
+    let nextAction:
+      | ReturnType<typeof catalogContinuation>
+      | ReturnType<typeof purchaseContinuation>
+      | undefined;
+    if (action.kind === "product") {
+      const [product] = await Product.create(
+        [
+          {
+            ...productSchema.parse(action.input),
+            businessId: auth.businessId,
+          },
+        ],
+        { session },
+      );
+      entityId = String(product!._id);
+      if (catalogHasStock(action)) {
+        const suppliers = await Contact.find({
+          businessId: auth.businessId,
+          kind: "supplier",
+        })
+          .select("name aliases")
+          .sort({ name: 1 })
+          .limit(35)
+          .session(session)
+          .lean();
+        stockEntry = productStockEntry(
+          product!,
+          suppliers,
+          {
+            quantity: action.input.quantity,
+            unitPrice: action.input.unitPrice,
+          },
+          action.purchaseInput,
+        );
+      }
+    } else {
+      const input = contactSchema.parse({
+        ...action.input,
+        kind: action.kind,
+      });
+      const [contact] = await Contact.create(
+        [
+          {
+            ...input,
+            creditLimit: paise(input.creditLimit),
+            businessId: auth.businessId,
+          },
+        ],
+        { session },
+      );
+      entityId = String(contact!._id);
+      if (action.kind === "supplier" && action.purchaseInput) {
+        const purchaseInput = { ...action.purchaseInput, contactId: entityId };
+        nextAction = action.productInput
+          ? catalogContinuation({
+              kind: "product",
+              input: action.productInput,
+              purchaseInput,
+              reviewId: randomUUID(),
+            })
+          : await supplierContinuation(purchaseInput);
+        conversation.contactId = contact!._id;
+      }
+    }
+    const receipt = {
+      reviewId,
+      kind: action.kind,
+      entityId,
+      name: validated.action.input.name,
+      ...(stockEntry ? { stockEntry } : {}),
+      ...(nextAction ? { nextAction } : {}),
+    };
+    conversation.lastCatalogSave = receipt;
+    conversation.pendingCatalogAction = nextAction?.catalogAction ?? null;
+    conversation.pendingInput = nextAction?.catalogAction
+      ? null
+      : (nextAction?.input ?? stockEntry?.input ?? null);
+    conversation.pendingQuestion =
+      nextAction?.followUp ?? stockEntry?.followUp ?? null;
+    conversation.pendingSourceIds = [];
+    await conversation.save({ session });
+    await Audit.create(
+      [
+        {
+          businessId: auth.businessId,
+          userId: auth.userId,
+          action: "VOICE_CREATE_" + action.kind.toUpperCase(),
+          entityId,
+        },
+      ],
+      { session },
+    );
+    return receipt;
+  });
+  return saved;
+}
+
 voiceRouter.post(
   "/catalog/confirm",
   authorize("contacts"),
@@ -580,109 +1065,7 @@ voiceRouter.post(
     const { reviewId } = z
       .strictObject({ confirm: z.literal(true), reviewId: z.string().uuid() })
       .parse(req.body);
-    const saved = await mongoose.connection.transaction(async (session) => {
-      const scope = {
-        businessId: req.auth.businessId,
-        userId: req.auth.userId,
-      };
-      const conversation = await Conversation.findOne({
-        ...scope,
-        expiresAt: { $gt: new Date() },
-      }).session(session);
-      assert(
-        conversation,
-        409,
-        "VOICE_REVIEW_EXPIRED",
-        "This review has expired. Describe the entry again.",
-      );
-      if (conversation.lastCatalogSave?.reviewId === reviewId)
-        return conversation.lastCatalogSave;
-      const action = conversation.pendingCatalogAction as
-        VoiceCatalogAction | undefined;
-      assert(
-        action?.reviewId === reviewId,
-        409,
-        "VOICE_REVIEW_CHANGED",
-        "The details have changed. Review the latest entry before saving.",
-      );
-      const validated = validateCatalogAction(action.kind, action.input);
-      assert(
-        validated.valid && action.ready,
-        422,
-        "VOICE_DETAILS_REQUIRED",
-        "Answer the remaining question before saving.",
-      );
-      const filter = {
-        businessId: req.auth.businessId,
-        name: validated.action.input.name,
-      };
-      const duplicate =
-        action.kind === "product"
-          ? await Product.exists(filter)
-              .collation({ locale: "en", strength: 2 })
-              .session(session)
-          : await Contact.exists({ ...filter, kind: action.kind })
-              .collation({ locale: "en", strength: 2 })
-              .session(session);
-      assert(
-        !duplicate,
-        409,
-        "VOICE_DUPLICATE",
-        "This name is already saved. Use the existing entry or change the name.",
-      );
-      let entityId: string;
-      if (action.kind === "product") {
-        const [product] = await Product.create(
-          [
-            {
-              ...productSchema.parse(action.input),
-              businessId: req.auth.businessId,
-            },
-          ],
-          { session },
-        );
-        entityId = String(product!._id);
-      } else {
-        const input = contactSchema.parse({
-          ...action.input,
-          kind: action.kind,
-        });
-        const [contact] = await Contact.create(
-          [
-            {
-              ...input,
-              creditLimit: paise(input.creditLimit),
-              businessId: req.auth.businessId,
-            },
-          ],
-          { session },
-        );
-        entityId = String(contact!._id);
-      }
-      const receipt = {
-        reviewId,
-        kind: action.kind,
-        entityId,
-        name: validated.action.input.name,
-      };
-      conversation.lastCatalogSave = receipt;
-      conversation.pendingCatalogAction = null;
-      conversation.pendingQuestion = null;
-      await conversation.save({ session });
-      await Audit.create(
-        [
-          {
-            businessId: req.auth.businessId,
-            userId: req.auth.userId,
-            action: "VOICE_CREATE_" + action.kind.toUpperCase(),
-            entityId,
-          },
-        ],
-        { session },
-      );
-      return receipt;
-    });
-    res.status(201).json(saved);
+    res.status(201).json(await confirmCatalog(req.auth, reviewId));
   },
 );
 voiceRouter.get("/history", async (req, res) => {

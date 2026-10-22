@@ -64,6 +64,7 @@ export const logger = pino({
     "refreshToken",
     "accessToken",
     "token",
+    "req.body.code",
     "MONGODB_URI",
     "SARVAM_API_KEY",
     "GROQ_API_KEY",
@@ -130,7 +131,15 @@ app.use(
     windowMs: 15 * 60000,
     limit: env.NODE_ENV === "test" ? 1000 : 30,
     skip: (req) =>
-      !["/login", "/register", "/refresh", "/recover"].includes(req.path),
+      ![
+        "/login",
+        "/register",
+        "/refresh",
+        "/recover",
+        "/phone/connect",
+        "/phone/connection-code",
+        "/phone/trust",
+      ].includes(req.path),
     standardHeaders: "draft-8",
     legacyHeaders: false,
     message: {

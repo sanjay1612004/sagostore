@@ -1,6 +1,7 @@
 import {
   contactSchema,
   productSchema,
+  voiceCatalogFieldsSchema,
   type VoiceCatalogAction,
   type VoiceCatalogFields,
 } from "@tamiltrade/shared";
@@ -20,7 +21,17 @@ const productKeys = [
   "unit",
   "weightGrams",
   "lowStockQuantity",
+  "quantity",
+  "unitPrice",
+  "quantityOptions",
 ] as const;
+
+export const catalogHasStock = (action: VoiceCatalogAction) =>
+  action.kind === "product" &&
+  (action.purchaseInput?.kind === "purchase" ||
+    action.input.quantity !== undefined ||
+    action.input.unitPrice !== undefined ||
+    !!action.input.quantityOptions?.length);
 
 export function validateCatalogAction(
   kind: VoiceCatalogAction["kind"],
@@ -32,6 +43,13 @@ export function validateCatalogAction(
       .filter((key) => fields[key] !== undefined)
       .map((key) => [key, fields[key]]),
   ) as VoiceCatalogFields;
+  const ambiguousQuantity =
+    kind === "product" && !!input.quantityOptions?.length;
+  if (ambiguousQuantity) delete input.quantity;
+  const quantityRequired =
+    kind === "product" &&
+    (ambiguousQuantity ||
+      (input.unitPrice !== undefined && input.quantity === undefined));
   // Names and a product's trading unit/weight must be supplied explicitly.
   // Optional defaults match the manual form and are displayed during review.
   const schema =
@@ -39,6 +57,9 @@ export function validateCatalogAction(
       ? productSchema.extend({
           unit: productSchema.shape.unit.removeDefault(),
           weightGrams: productSchema.shape.weightGrams.removeDefault(),
+          quantity: voiceCatalogFieldsSchema.shape.quantity,
+          unitPrice: voiceCatalogFieldsSchema.shape.unitPrice,
+          quantityOptions: voiceCatalogFieldsSchema.shape.quantityOptions,
         })
       : contactSchema.omit({ kind: true });
   const parsed = schema.safeParse(input);
@@ -47,10 +68,17 @@ export function validateCatalogAction(
       kind,
       input: parsed.success ? parsed.data : input,
     } as VoiceCatalogAction,
-    missing: parsed.success
-      ? []
-      : [...new Set(parsed.error.issues.map((issue) => String(issue.path[0])))],
-    valid: parsed.success,
+    missing: [
+      ...(quantityRequired ? ["quantity"] : []),
+      ...(parsed.success
+        ? []
+        : [
+            ...new Set(
+              parsed.error.issues.map((issue) => String(issue.path[0])),
+            ),
+          ]),
+    ],
+    valid: parsed.success && !quantityRequired,
   };
 }
 
@@ -67,6 +95,7 @@ export function catalogVoiceQuestion(
         "name",
         "phone",
         "unit",
+        "quantity",
         "weightGrams",
         "paymentTermsDays",
         "creditLimit",
@@ -92,6 +121,14 @@ export function catalogVoiceQuestion(
     unit: [
       "What is the trading unit: bag, kg, carton, or another unit?",
       "எந்த அலகில் விற்கிறீர்கள்? மூட்டை, கிலோ அல்லது பெட்டியா?",
+    ],
+    quantity: [
+      action.input.quantityOptions?.length
+        ? `You mentioned different quantities. Did you buy ${action.input.quantityOptions.map((count) => `${count} ${action.input.unit === "bag" ? "bags" : (action.input.unit ?? "units")}`).join(" or ")}?`
+        : "How many units or bags did you buy?",
+      action.input.quantityOptions?.length
+        ? "நீங்கள் வெவ்வேறு எண்ணிக்கைகளைச் சொன்னீர்கள். சரியாக எத்தனை மூட்டைகள் வாங்கினீர்கள்?"
+        : "எத்தனை மூட்டைகள் அல்லது பொருட்கள் வாங்கினீர்கள்?",
     ],
     weightGrams: [
       "How much does one trading unit weigh? For example, 50 kilograms per bag.",
@@ -138,6 +175,15 @@ export function catalogVoiceQuestion(
     field: field ?? "name",
     question: question!,
     questionTamil: questionTamil!,
-    choices: [],
+    choices:
+      field === "quantity"
+        ? [...new Set(action.input.quantityOptions ?? [])].map((count) => ({
+            value: String(count),
+            label: `${count} ${action.input.unit === "bag" ? "bags" : (action.input.unit ?? "units")}`,
+            ...(action.input.unit === "bag"
+              ? { speechLabelTamil: `${count} மூட்டைகள்` }
+              : {}),
+          }))
+        : [],
   };
 }

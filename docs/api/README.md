@@ -8,47 +8,54 @@ Voice requests have separate per-IP one-minute budgets: 20 commands/uploads/canc
 
 The worker publishes a heartbeat every five seconds; it is considered online when seen within 20 seconds. Authenticated voice configuration includes `worker: {online,lastSeenAt}` independently of provider key readiness. Queued job responses include `queue: {workerOnline,waitedSeconds}`. Offline queues are polled every five seconds and shown as safely queued with a cancellation option. New uploads receive `503 VOICE_WORKER_OFFLINE` while processing is offline, preserving the device recording for retry; accepted idempotent uploads still return their existing job. A healthy-but-busy queue is distinguished from an offline worker. Development startup now launches the API and worker together with `npm run dev -w server`.
 
-| Method / route                                        | Behavior                                                                       |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `POST /auth/register`                                 | Transactionally create owner/business when registration is enabled             |
-| `POST /auth/login`                                    | Argon2id login and device session                                              |
-| `POST /auth/refresh`                                  | `{refreshToken}` → rotated credentials                                         |
-| `POST /auth/recover`                                  | `{token,password}` consumes administrator-issued one-time token                |
-| `GET /auth/me`, `POST /auth/logout`                   | Inspect account / revoke current session                                       |
-| `GET /auth/sessions`, `DELETE /auth/sessions/:id`     | Inspect / revoke own devices                                                   |
-| `GET, POST /auth/staff`, `PATCH /auth/staff/:id`      | Owner staff management; changes revoke staff sessions                          |
-| `GET, PATCH /api/business`                            | Read business / owner update                                                   |
-| `GET, POST /api/contacts`                             | Paginated contacts; `kind`, literal escaped `search`                           |
-| `GET, PATCH /api/contacts/:id`                        | Scoped contact read/update                                                     |
-| `GET /api/contacts/:id/ledger`                        | Paginated transaction-derived ledger and full balance                          |
-| `GET, POST /api/products`                             | Configurable trading units and weights                                         |
-| `GET /api/records`                                    | Paginated activity; `kind`, `contactId`, `from`, `to` filters                  |
-| `GET /api/records/:id`                                | Calculated transaction and confirmation input                                  |
-| `POST /api/drafts`                                    | Validate/preview input; **UUID Idempotency-Key header required**               |
-| `PATCH /api/drafts/:id`                               | Cancel old pending preview and create revised preview with new UUID key        |
-| `POST /api/drafts/:id/confirm`                        | `{confirm:true}`; atomic idempotent financial commit                           |
-| `DELETE /api/drafts/:id`                              | Cancel pending preview                                                         |
-| `POST /api/records/:id/reverse`                       | Owner reversal with `{reason}`; preserves original record                      |
-| `GET /api/inventory`                                  | Paginated lots; optional `productId`; warehouse/direct quantities distinct     |
-| `GET /api/inventory/products`                         | Product stock totals and low-stock thresholds                                  |
-| `GET /api/inventory/:id/movements`                    | Paginated lot movements                                                        |
-| `GET /api/dashboard`                                  | Actual current-month metrics and daily trend; reports permission               |
-| `GET /api/prices`                                     | Latest 200 actual purchase prices; optional `productId`                        |
-| `GET /api/reminders`                                  | Up to 100 due/overdue balances                                                 |
-| `GET /api/audit`                                      | Owner-only paginated audit history                                             |
-| `POST /api/voice/text`                                | `{text}` → intent, editable input, missing fields, candidates, verified answer |
-| `POST /api/voice/jobs`                                | Authenticated multipart `audio`; UUID Idempotency-Key; 202 job ID              |
-| `GET, DELETE /api/voice/jobs/:id`                     | Own processing status/result or cancellation                                   |
-| `GET /api/voice/history`, `DELETE /api/voice/context` | Own recent conversation / clear context                                        |
-| `GET, POST /api/invoices`                             | Paginated invoices / create draft `{saleId}`                                   |
-| `POST /api/invoices/:id/issue`                        | `{confirm:true}`; atomic number and immutable snapshot                         |
-| `GET /api/invoices/:id/pdf`                           | Authenticated real PDF                                                         |
-| `POST, DELETE /api/invoices/:id/share`                | Create/rotate one-day token / revoke links                                     |
-| `POST /api/invoices/:id/cancel`                       | Owner cancellation with reason; does not reverse sale                          |
-| `GET /share/:token`                                   | Public bearer capability; issued/unexpired/unrevoked PDF only                  |
-| `GET /health/live`, `GET /health/ready`               | Process liveness / database readiness                                          |
+| Method / route                                        | Behavior                                                                                             |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `POST /auth/register`                                 | Transactionally create owner/business when registration is enabled                                   |
+| `POST /auth/login`                                    | Argon2id login and device session                                                                    |
+| `POST /auth/refresh`                                  | `{refreshToken}` → rotated credentials                                                               |
+| `POST /auth/phone/connect`                            | `{code,device?}` consumes a 10-minute one-time connection code and returns a revocable phone session |
+| `POST /auth/phone/connection-code`                    | Authenticated account issues a code for its own business/role                                        |
+| `POST /auth/phone/trust`                              | Authenticated session migrates to long-lived phone access after local OS unlock                      |
+| `POST /auth/recover`                                  | `{token,password}` consumes administrator-issued one-time token                                      |
+| `GET /auth/me`, `POST /auth/logout`                   | Inspect account / revoke current session                                                             |
+| `GET /auth/sessions`, `DELETE /auth/sessions/:id`     | Inspect / revoke own devices                                                                         |
+| `GET, POST /auth/staff`, `PATCH /auth/staff/:id`      | Owner staff management; changes revoke staff sessions                                                |
+| `GET, PATCH /api/business`                            | Read business / owner update                                                                         |
+| `GET, POST /api/contacts`                             | Paginated contacts; `kind`, literal escaped `search`                                                 |
+| `GET, PATCH /api/contacts/:id`                        | Scoped contact read/update                                                                           |
+| `GET /api/contacts/:id/ledger`                        | Paginated transaction-derived ledger and full balance                                                |
+| `GET, POST /api/products`                             | Configurable trading units and weights                                                               |
+| `GET /api/records`                                    | Paginated activity; `kind`, `contactId`, `from`, `to` filters                                        |
+| `GET /api/records/:id`                                | Calculated transaction and confirmation input                                                        |
+| `POST /api/drafts`                                    | Validate/preview input; **UUID Idempotency-Key header required**                                     |
+| `PATCH /api/drafts/:id`                               | Cancel old pending preview and create revised preview with new UUID key                              |
+| `POST /api/drafts/:id/confirm`                        | `{confirm:true}`; atomic idempotent financial commit                                                 |
+| `DELETE /api/drafts/:id`                              | Cancel pending preview                                                                               |
+| `POST /api/records/:id/reverse`                       | Owner reversal with `{reason}`; preserves original record                                            |
+| `GET /api/inventory`                                  | Paginated lots; optional `productId`; warehouse/direct quantities distinct                           |
+| `GET /api/inventory/products`                         | Product stock totals and low-stock thresholds                                                        |
+| `GET /api/inventory/:id/movements`                    | Paginated lot movements                                                                              |
+| `GET /api/dashboard`                                  | Actual current-month metrics and daily trend; reports permission                                     |
+| `GET /api/prices`                                     | Latest 200 actual purchase prices; optional `productId`                                              |
+| `GET /api/reminders`                                  | Up to 100 due/overdue balances                                                                       |
+| `GET /api/audit`                                      | Owner-only paginated audit history                                                                   |
+| `POST /api/voice/text`                                | `{text}` → intent, editable input, missing fields, candidates, verified answer                       |
+| `POST /api/voice/jobs`                                | Authenticated multipart `audio`; UUID Idempotency-Key; 202 job ID                                    |
+| `GET, DELETE /api/voice/jobs/:id`                     | Own processing status/result or cancellation                                                         |
+| `GET /api/voice/history`, `DELETE /api/voice/context` | Own recent conversation / clear context                                                              |
+| `GET, POST /api/invoices`                             | Paginated invoices / create draft `{saleId}`                                                         |
+| `POST /api/invoices/:id/issue`                        | `{confirm:true}`; atomic number and immutable snapshot                                               |
+| `GET /api/invoices/:id/pdf`                           | Authenticated real PDF                                                                               |
+| `POST, DELETE /api/invoices/:id/share`                | Create/rotate one-day token / revoke links                                                           |
+| `POST /api/invoices/:id/cancel`                       | Owner cancellation with reason; does not reverse sale                                                |
+| `GET /share/:token`                                   | Public bearer capability; issued/unexpired/unrevoked PDF only                                        |
+| `GET /health/live`, `GET /health/ready`               | Process liveness / database readiness                                                                |
 
 ## Purchase preview example
+
+For a new-product stock proposal, `unitPrice` is a staged rupee-string purchase price. Optional `quantityOptions` holds two to five conflicting positive counts extracted by the model. It blocks catalog readiness, suppresses any simultaneously guessed `quantity`, and returns a quantity follow-up with tappable/spoken choices before asking for weight. An explicit quantity correction clears the old options. Product confirmation carries the resolved quantity and price into `stockEntry`; neither is persisted as a product attribute. These proposals require purchases permission even when the quantity is still missing or ambiguous.
+
+`POST /api/voice/stock/start` accepts `{productId}` and requires purchases permission. It starts a business-scoped warehouse purchase draft for an existing product, asks for missing supplier/quantity/price, and does not write stock. Product voice creation can include `input.quantity` as a requested receipt quantity, separate from `weightGrams` and `lowStockQuantity`. On catalog confirmation, the product receipt includes `stockEntry` with the preserved quantity and next voice question; confirmations with a quantity also require purchases permission. Retrying returns the current pending stock entry and never restarts a completed/cancelled purchase. Only normal purchase confirmation creates inventory movements.
 
 ```json
 {

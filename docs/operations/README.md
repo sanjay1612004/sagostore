@@ -17,6 +17,8 @@ Restore only to an isolated `tamiltrade_restore` database using `infra/backup/re
 
 ## Account recovery
 
+For phone access without an account password, use a [one-time phone connection code](../deployment/PHONE_ACCESS.md). An already connected device can issue one in Settings, or a trusted server administrator can run `npm run connect:phone -w server -- owner@example.com`. Verify identity before delivering it. Revoke lost phones from Settings → Connected devices; this also invalidates pending codes issued by that session.
+
 No mail delivery provider is configured and the UI does not pretend that a recovery email was sent. An administrator with verified server access can run:
 
 ```bash

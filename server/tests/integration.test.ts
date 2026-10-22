@@ -39,6 +39,8 @@ async function commit(draft: string, token = owner) {
     .send({ confirm: true });
 }
 const base = { date: "2026-10-16", delivery: "warehouse" };
+const ambiguousProductCommand =
+  "நான் வந்து இப்போ ஒரு new product add பண்ணனும். அது வந்து நேபாள் ஜவ்வரிசி. இதை வந்து inventory-ல போய் add பண்ணேன். இது வந்து நம்ம வந்து 10 மூட்டை வாங்கிருக்கோம். ஒரு மூட்டையோட விலை வந்து ₹100. 20 bag வாங்கிருக்கோம்.";
 beforeAll(async () => {
   // Controlled provider responses test the HTTP/DB integration, not model accuracy.
   vi.stubGlobal(
@@ -94,6 +96,83 @@ beforeAll(async () => {
         });
       }
       const fixtures: Record<string, Partial<CommandPlan>> = {
+        "Bought Coimbatore sago from Rathina Stores": {
+          intent: "CREATE_PURCHASE",
+          input: {
+            productName: "Coimbatore sago",
+            contactName: "Rathina Stores",
+          },
+        },
+        "Bought Sago from Rathina Stores, 20 bags at 1500": {
+          intent: "CREATE_PURCHASE",
+          input: {
+            productName: "Sago",
+            contactName: "Rathina Stores",
+            quantity: 20,
+            unitPrice: "1500",
+            transport: "500",
+          },
+        },
+        "Bought Sago, 20 bags at 1500": {
+          intent: "CREATE_PURCHASE",
+          input: { productName: "Sago", quantity: 20, unitPrice: "1500" },
+        },
+        "Bought Coimbatore sago, 20 bags at 1500": {
+          intent: "CREATE_PURCHASE",
+          input: {
+            productName: "Coimbatore sago",
+            quantity: 20,
+            unitPrice: "1500",
+          },
+        },
+        "Rathina Stores": {
+          intent: "UPDATE_PENDING_DRAFT",
+          input: { contactName: "Rathina Stores" },
+        },
+        "20 bags at 1500": {
+          intent: "UPDATE_PENDING_DRAFT",
+          input: { quantity: 20, unitPrice: "1500" },
+        },
+        "Yes, please add Rathina Stores to my supplier list.": {
+          intent: "APPROVE_PENDING_SUPPLIER",
+          input: {},
+        },
+        "Today I got Coimbatore sago": {
+          intent: "CREATE_PURCHASE",
+          input: { productName: "Coimbatore sago" },
+        },
+        "Received Coimbatore sago from Pack Demo Mill, 20 bags at 1500, transport 500, direct delivery":
+          {
+            intent: "CREATE_PURCHASE",
+            input: {
+              productName: "Coimbatore sago",
+              contactName: "Pack Demo Mill",
+              quantity: 20,
+              unitPrice: "1500",
+              transport: "500",
+              delivery: "direct",
+              unit: "bag",
+              weightGrams: 25000,
+            },
+          },
+        [ambiguousProductCommand]: {
+          intent: "CREATE_PRODUCT",
+          input: {
+            name: "நேபாள் ஜவ்வரிசி",
+            unit: "bag",
+            unitPrice: "100",
+            quantityOptions: [10, 20],
+          },
+        },
+        "20 bags": { intent: "UPDATE_PENDING_DRAFT", input: { quantity: 20 } },
+        "Each bag weighs 25 kilograms": {
+          intent: "UPDATE_PENDING_DRAFT",
+          input: { weightGrams: 25000 },
+        },
+        "From Nepal Demo Mill": {
+          intent: "UPDATE_PENDING_DRAFT",
+          input: { contactName: "Nepal Demo Mill" },
+        },
         "Add Voice Demo Mill as supplier phone 09876543210": {
           intent: "CREATE_SUPPLIER",
           input: {
@@ -129,6 +208,40 @@ beforeAll(async () => {
         "25 kilograms per bag, low stock 5": {
           intent: "UPDATE_PENDING_DRAFT",
           input: { weightGrams: 25000, lowStockQuantity: 5 },
+        },
+        "Chennai sago, 10 kg, 20 bags": {
+          intent: "CREATE_PRODUCT",
+          input: {
+            name: "Chennai sago",
+            unit: "bag",
+            weightGrams: 10000,
+            quantity: 20,
+          },
+        },
+        "Pack permission demo, 10 kg, 20 bags": {
+          intent: "CREATE_PRODUCT",
+          input: {
+            name: "Pack permission demo",
+            unit: "bag",
+            weightGrams: 10000,
+            quantity: 20,
+          },
+        },
+        "From Pack Demo Mill": {
+          intent: "UPDATE_PENDING_DRAFT",
+          input: { contactName: "Pack Demo Mill" },
+        },
+        "1500 per bag": {
+          intent: "UPDATE_PENDING_DRAFT",
+          input: { unitPrice: "1500" },
+        },
+        "Pack Demo Mill, 20 bags, 1500 per bag": {
+          intent: "UPDATE_PENDING_DRAFT",
+          input: {
+            contactName: "Pack Demo Mill",
+            quantity: 20,
+            unitPrice: "1500",
+          },
         },
         "Cancel the catalog entry": {
           intent: "CANCEL_PENDING_ACTION",
@@ -1643,6 +1756,621 @@ describe.sequential("transactional business acceptance scenario", () => {
         businessId: { $in: [businessId, foreignId] },
       });
     }
+  });
+  it.each([
+    "existing",
+    "new",
+    "both",
+    "reply",
+    "productReply",
+    "natural",
+    "decline",
+  ])(
+    "understands Rathina Stores as the purchase supplier and resumes after consent (%s)",
+    async (scenario) => {
+      const { Contact, Product, Record, Movement, Conversation } =
+        await import("../src/modules/models.js");
+      const registration = await request(app)
+        .post("/auth/register")
+        .send({
+          email: `rathina-${scenario}@example.com`,
+          password: "Supplier-test-password-123",
+          name: "Supplier Test",
+          businessName: "Rathina Receipt Test",
+        });
+      expect(registration.status).toBe(201);
+      const token = registration.body.accessToken;
+      const scope = { businessId: registration.body.user.businessId };
+      const command = (text: string) =>
+        request(app).post("/api/voice/text").set(bearer(token)).send({ text });
+      const sago = await request(app)
+        .post("/api/products")
+        .set(bearer(token))
+        .send({ name: "Sago", unit: "bag", weightGrams: 25000 });
+      expect(sago.status, sago.text).toBe(201);
+      let supplierId: string | undefined;
+      if (scenario === "existing") {
+        const saved = await request(app)
+          .post("/api/contacts")
+          .set(bearer(token))
+          .send({ name: "Rathina Stores", kind: "supplier" });
+        expect(saved.status).toBe(201);
+        supplierId = saved.body._id;
+      }
+      let result = await command(
+        scenario === "both"
+          ? "Bought Coimbatore sago from Rathina Stores"
+          : scenario === "productReply"
+            ? "Bought Coimbatore sago, 20 bags at 1500"
+            : scenario === "reply"
+              ? "Bought Sago, 20 bags at 1500"
+              : "Bought Sago from Rathina Stores, 20 bags at 1500",
+      );
+      expect(result.status, result.text).toBe(200);
+      if (scenario === "reply" || scenario === "productReply") {
+        expect(result.body.followUp.field).toBe(
+          scenario === "reply" ? "contactId" : "unit",
+        );
+        result = await command("Rathina Stores");
+        expect(result.status, result.text).toBe(200);
+      }
+      if (scenario === "existing") {
+        expect(result.body.catalogAction).toBeUndefined();
+        expect(result.body.input.contactId).toBe(supplierId);
+        expect(result.body.followUp).toBeUndefined();
+      } else {
+        expect(result.body.catalogAction).toMatchObject({
+          kind: "supplier",
+          input: { name: "Rathina Stores" },
+          ready: true,
+        });
+        expect(result.body.followUp).toBeUndefined();
+        expect(result.body.clarification).toEqual([]);
+        expect(await Contact.countDocuments(scope)).toBe(0);
+        expect(await Record.countDocuments(scope)).toBe(0);
+        if (scenario === "decline") {
+          const rejected = await command("no");
+          expect(rejected.status, rejected.text).toBe(200);
+          expect(rejected.body.intent).toBe("CANCEL_PENDING_ACTION");
+          expect(await Contact.countDocuments(scope)).toBe(0);
+          expect(
+            (await Conversation.findOne(scope).lean())?.pendingCatalogAction,
+          ).toBeNull();
+          return;
+        }
+        if (scenario === "new") {
+          const reviewId = result.body.catalogAction.reviewId;
+          const save = () =>
+            request(app)
+              .post("/api/voice/catalog/confirm")
+              .set(bearer(token))
+              .send({ confirm: true, reviewId });
+          const [saved, duplicate] = await Promise.all([save(), save()]);
+          expect(saved.status, saved.text).toBe(201);
+          expect(duplicate.status, duplicate.text).toBe(201);
+          expect(saved.body.entityId).toBe(duplicate.body.entityId);
+          supplierId = saved.body.entityId;
+          result.body = saved.body.nextAction;
+          expect(result.body.input.transport).toBe("500");
+          const replay = await save();
+          expect(replay.body.nextAction.input).toEqual(result.body.input);
+        } else {
+          result = await command(
+            scenario === "natural"
+              ? "Yes, please add Rathina Stores to my supplier list."
+              : "yes",
+          );
+          expect(result.status, result.text).toBe(200);
+          const saved = await Contact.findOne({
+            ...scope,
+            kind: "supplier",
+          }).lean();
+          supplierId = String(saved!._id);
+        }
+        expect(await Contact.countDocuments(scope)).toBe(1);
+      }
+      if (scenario === "both" || scenario === "productReply") {
+        expect(result.body.catalogAction).toMatchObject({
+          kind: "product",
+          input: { name: "Coimbatore sago" },
+          purchaseInput: { contactId: supplierId },
+        });
+        expect(result.body.followUp.field).toBe("unit");
+        result = await command("Trading unit bag");
+        expect(result.status, result.text).toBe(200);
+        result = await command("25 kilograms per bag, low stock 5");
+        expect(result.status, result.text).toBe(200);
+        expect(result.body.canPreview, result.text).toBe(true);
+        const saved = await request(app)
+          .post("/api/voice/catalog/confirm")
+          .set(bearer(token))
+          .send({
+            confirm: true,
+            reviewId: result.body.catalogAction.reviewId,
+          });
+        expect(saved.status, saved.text).toBe(201);
+        result.body = saved.body.stockEntry;
+        expect(result.body.input.contactId).toBe(supplierId);
+        expect(result.body.missing).not.toContain("contactId");
+        if (scenario === "both") {
+          expect(result.body.followUp.field).toBe("quantity");
+          result = await command("20 bags at 1500");
+          expect(result.status, result.text).toBe(200);
+        }
+      }
+      expect(result.body.canPreview).toBe(true);
+      expect(result.body.followUp).toBeUndefined();
+      expect(result.body.input).toMatchObject({
+        contactId: supplierId,
+        quantity: 20,
+        unitPrice: "1500",
+      });
+      expect(await Record.countDocuments(scope)).toBe(0);
+      expect(await Movement.countDocuments(scope)).toBe(0);
+      const draft = await postDraft(result.body.input, token);
+      const posted = await commit(draft, token);
+      expect(posted.status, posted.text).toBe(200);
+      expect(await Contact.countDocuments(scope)).toBe(1);
+      expect(await Product.countDocuments(scope)).toBe(
+        scenario === "both" || scenario === "productReply" ? 2 : 1,
+      );
+      expect(await Record.countDocuments(scope)).toBe(1);
+      expect(await Movement.countDocuments(scope)).toBe(1);
+    },
+  );
+  it("checks current staff permissions before spoken supplier approval", async () => {
+    const { Contact, Conversation } = await import("../src/modules/models.js");
+    const registration = await request(app).post("/auth/register").send({
+      email: "rathina-permissions@example.com",
+      password: "Supplier-test-password-123",
+      name: "Supplier Owner",
+      businessName: "Supplier Permission Test",
+    });
+    expect(registration.status).toBe(201);
+    const ownerToken = registration.body.accessToken;
+    const scope = { businessId: registration.body.user.businessId };
+    const staff = await request(app)
+      .post("/auth/staff")
+      .set(bearer(ownerToken))
+      .send({
+        name: "Supplier Staff",
+        email: "rathina-staff@example.com",
+        password: "Supplier-test-password-123",
+        permissions: ["contacts", "purchases"],
+      });
+    expect(staff.status).toBe(201);
+    const login = await request(app).post("/auth/login").send({
+      email: "rathina-staff@example.com",
+      password: "Supplier-test-password-123",
+    });
+    expect(login.status).toBe(200);
+    let staffToken = login.body.accessToken;
+    const command = (text: string) =>
+      request(app)
+        .post("/api/voice/text")
+        .set(bearer(staffToken))
+        .send({ text });
+    const proposed = await command(
+      "Bought Coimbatore sago from Rathina Stores",
+    );
+    expect(proposed.status, proposed.text).toBe(200);
+    expect(proposed.body.catalogAction.ready).toBe(true);
+    const revoked = await request(app)
+      .patch(`/auth/staff/${staff.body.id}`)
+      .set(bearer(ownerToken))
+      .send({ permissions: ["contacts"], active: true });
+    expect(revoked.status, revoked.text).toBe(204);
+    const expired = await command("yes");
+    expect(expired.status, expired.text).toBe(401);
+    const limited = await request(app)
+      .post("/auth/login")
+      .send({
+        email: "rathina-staff@example.com",
+        password: "Supplier-test-password-123",
+      });
+    expect(limited.status).toBe(200);
+    staffToken = limited.body.accessToken;
+    const approved = await command("yes");
+    expect(approved.status, approved.text).toBe(403);
+    expect(await Contact.countDocuments(scope)).toBe(0);
+    expect(
+      (await Conversation.findOne(scope).lean())?.pendingCatalogAction?.input
+        .name,
+    ).toBe("Rathina Stores");
+  });
+  it.each([false, true])(
+    "receives unsaved Coimbatore sago without asking for its name again (complete receipt: %s)",
+    async (complete) => {
+      const { Product, Record, Movement, Conversation } =
+        await import("../src/modules/models.js");
+      const registered = await request(app)
+        .post("/auth/register")
+        .send({
+          email: `coimbatore-${complete}@example.com`,
+          password: "Stock-test-password-123",
+          name: "Receipt Test",
+          businessName: "Coimbatore Receipt Business",
+        });
+      expect(registered.status).toBe(201);
+      const token = registered.body.accessToken;
+      const scope = { businessId: registered.body.user.businessId };
+      const command = (text: string) =>
+        request(app).post("/api/voice/text").set(bearer(token)).send({ text });
+      const mill = await request(app)
+        .post("/api/contacts")
+        .set(bearer(token))
+        .send({ name: "Pack Demo Mill", kind: "supplier" });
+      expect(mill.status).toBe(201);
+      let result = await command(
+        complete
+          ? "Received Coimbatore sago from Pack Demo Mill, 20 bags at 1500, transport 500, direct delivery"
+          : "Today I got Coimbatore sago",
+      );
+      expect(result.status, result.text).toBe(200);
+      expect(result.body.catalogAction.input.name).toBe("Coimbatore sago");
+      expect(result.body.clarification).toEqual([]);
+      if (!complete) {
+        expect(result.body.followUp.field).toBe("unit");
+        result = await command("Trading unit bag");
+        expect(result.status, result.text).toBe(200);
+        expect(result.body.followUp.field).toBe("weightGrams");
+        result = await command("25 kilograms per bag, low stock 5");
+        expect(result.status, result.text).toBe(200);
+      }
+      expect(result.body.catalogAction.input.name).toBe("Coimbatore sago");
+      expect(result.body.canPreview).toBe(true);
+      expect(await Product.countDocuments(scope)).toBe(0);
+      const save = () =>
+        request(app)
+          .post("/api/voice/catalog/confirm")
+          .set(bearer(token))
+          .send({
+            confirm: true,
+            reviewId: result.body.catalogAction.reviewId,
+          });
+      const saved = await save();
+      expect(saved.status, saved.text).toBe(201);
+      expect(saved.body.stockEntry.input.productId).toBe(saved.body.entityId);
+      expect(saved.body.stockEntry.summary.productName).toBe("Coimbatore sago");
+      expect(saved.body.stockEntry.missing).not.toContain("productId");
+      let receipt = saved.body.stockEntry;
+      if (!complete) {
+        expect(receipt.followUp.field).toBe("contactId");
+        const supplierReply = await command(
+          "Pack Demo Mill, 20 bags, 1500 per bag",
+        );
+        expect(supplierReply.status, supplierReply.text).toBe(200);
+        receipt = supplierReply.body;
+      }
+      expect(receipt.canPreview).toBe(true);
+      expect(receipt.followUp).toBeUndefined();
+      expect(receipt.input).toMatchObject({
+        productId: saved.body.entityId,
+        contactId: mill.body._id,
+        quantity: 20,
+        unitPrice: "1500",
+        delivery: complete ? "direct" : "warehouse",
+      });
+      if (complete) expect(receipt.input.transport).toBe("500");
+      const replay = await save();
+      expect(replay.body.stockEntry.input).toEqual(receipt.input);
+      expect(replay.body.stockEntry.followUp).toBeUndefined();
+      expect(
+        (await Conversation.findOne(scope).lean())?.pendingInput,
+      ).toMatchObject(receipt.input);
+      expect(await Record.countDocuments(scope)).toBe(0);
+      expect(await Movement.countDocuments(scope)).toBe(0);
+      const draft = await postDraft(receipt.input, token);
+      const posted = await commit(draft, token);
+      expect(posted.status, posted.text).toBe(200);
+      expect(await Product.countDocuments(scope)).toBe(1);
+      expect(await Record.countDocuments(scope)).toBe(1);
+      expect(await Movement.countDocuments(scope)).toBe(complete ? 0 : 1);
+    },
+  );
+  it("carries twenty 10 kg bags from product creation through spoken purchase details into warehouse stock", async () => {
+    const { Product, Record, Movement, Conversation } =
+      await import("../src/modules/models.js");
+    const registered = await request(app).post("/auth/register").send({
+      email: "stock-voice@example.com",
+      password: "Stock-test-password-123",
+      name: "Stock Test",
+      businessName: "Pack Demo Business",
+    });
+    expect(registered.status).toBe(201);
+    const token = registered.body.accessToken;
+    const businessId = registered.body.user.businessId;
+    const scope = { businessId };
+    const command = (text: string, access = token) =>
+      request(app).post("/api/voice/text").set(bearer(access)).send({ text });
+    const mill = await request(app)
+      .post("/api/contacts")
+      .set(bearer(token))
+      .send({ name: "Pack Demo Mill", kind: "supplier" });
+    expect(mill.status).toBe(201);
+    const proposed = await command("Chennai sago, 10 kg, 20 bags");
+    expect(proposed.status, proposed.text).toBe(200);
+    expect(proposed.body.catalogAction.input).toMatchObject({
+      quantity: 20,
+      weightGrams: 10000,
+      unit: "bag",
+      lowStockQuantity: 10,
+    });
+    expect(await Product.countDocuments(scope)).toBe(0);
+    const confirmProduct = () =>
+      request(app).post("/api/voice/catalog/confirm").set(bearer(token)).send({
+        confirm: true,
+        reviewId: proposed.body.catalogAction.reviewId,
+      });
+    const [saved, duplicate] = await Promise.all([
+      confirmProduct(),
+      confirmProduct(),
+    ]);
+    expect(saved.status, saved.text).toBe(201);
+    expect(duplicate.status, duplicate.text).toBe(201);
+    expect(saved.body.entityId).toBe(duplicate.body.entityId);
+    expect(saved.body.stockEntry).toMatchObject({
+      input: {
+        kind: "purchase",
+        productId: saved.body.entityId,
+        quantity: 20,
+        delivery: "warehouse",
+      },
+      summary: { productName: "Chennai sago", unit: "bag", weightGrams: 10000 },
+      followUp: { field: "contactId" },
+      canPreview: false,
+    });
+    expect(saved.body.stockEntry.missing).not.toContain("quantity");
+    expect(await Product.countDocuments(scope)).toBe(1);
+    expect(await Product.findById(saved.body.entityId).lean()).toMatchObject({
+      weightGrams: 10000,
+      unit: "bag",
+    });
+    expect(
+      await Product.findById(saved.body.entityId).lean(),
+    ).not.toHaveProperty("quantity");
+    expect(await Record.countDocuments(scope)).toBe(0);
+    expect(await Movement.countDocuments(scope)).toBe(0);
+    const supplierReply = await command("From Pack Demo Mill");
+    expect(supplierReply.status, supplierReply.text).toBe(200);
+    expect(supplierReply.body.input).toMatchObject({
+      productId: saved.body.entityId,
+      quantity: 20,
+      contactId: mill.body._id,
+    });
+    expect(supplierReply.body.followUp.field).toBe("unitPrice");
+    const costReply = await command("1500 per bag");
+    expect(costReply.status, costReply.text).toBe(200);
+    expect(costReply.body.canPreview).toBe(true);
+    expect(costReply.body.input).toMatchObject({
+      quantity: 20,
+      unitPrice: "1500",
+      contactId: mill.body._id,
+    });
+    // Retrying product confirmation must preserve answers instead of rewinding them.
+    const replay = await confirmProduct();
+    expect(replay.body.stockEntry.canPreview).toBe(true);
+    expect(replay.body.stockEntry.input).toMatchObject(costReply.body.input);
+    expect(replay.body.stockEntry.followUp).toBeUndefined();
+    expect(
+      (await Conversation.findOne(scope).lean())?.pendingInput,
+    ).toMatchObject(costReply.body.input);
+    expect(await Record.countDocuments(scope)).toBe(0);
+    const draft = await postDraft(costReply.body.input, token);
+    const posted = await commit(draft, token);
+    expect(posted.status, posted.text).toBe(200);
+    expect((await commit(draft, token)).body._id).toBe(posted.body._id);
+    expect(await Record.countDocuments(scope)).toBe(1);
+    expect(await Movement.countDocuments(scope)).toBe(1);
+    const stock = await request(app)
+      .get("/api/inventory/products")
+      .set(bearer(token));
+    expect(stock.body).toHaveLength(1);
+    expect(stock.body[0]).toMatchObject({
+      name: "Chennai sago",
+      available: 20,
+      unit: "bag",
+      weightGrams: 10000,
+    });
+    expect((stock.body[0].available * stock.body[0].weightGrams) / 1000).toBe(
+      200,
+    );
+    expect((await confirmProduct()).body.stockEntry).toBeUndefined();
+    expect(await Record.countDocuments(scope)).toBe(1);
+
+    // Receive stock for an existing zero-stock product without creating a duplicate.
+    const existing = await request(app)
+      .post("/api/products")
+      .set(bearer(token))
+      .send({ name: "Existing pack demo", unit: "bag", weightGrams: 10000 });
+    expect(existing.status).toBe(201);
+    const start = await request(app)
+      .post("/api/voice/stock/start")
+      .set(bearer(token))
+      .send({ productId: existing.body._id });
+    expect(start.status, start.text).toBe(200);
+    expect(start.body.input.productId).toBe(existing.body._id);
+    expect(start.body.input.quantity).toBeUndefined();
+    expect(start.body.missing).toContain("quantity");
+    expect(start.body.summary).toMatchObject({
+      unit: "bag",
+      weightGrams: 10000,
+    });
+    const restock = await command("Pack Demo Mill, 20 bags, 1500 per bag");
+    expect(restock.body.canPreview).toBe(true);
+    expect(restock.body.input).toMatchObject({
+      productId: existing.body._id,
+      quantity: 20,
+      unitPrice: "1500",
+    });
+    const restockDraft = await postDraft(restock.body.input, token);
+    expect((await commit(restockDraft, token)).status).toBe(200);
+    const restocked = await request(app)
+      .get("/api/inventory/products")
+      .set(bearer(token));
+    expect(
+      restocked.body.find((p: { _id: string }) => p._id === existing.body._id)
+        .available,
+    ).toBe(20);
+    expect(await Product.countDocuments(scope)).toBe(2);
+    expect(
+      (
+        await request(app)
+          .post("/api/voice/stock/start")
+          .set(bearer())
+          .send({ productId: existing.body._id })
+      ).status,
+    ).toBe(404);
+
+    const staff = await request(app)
+      .post("/auth/staff")
+      .set(bearer(token))
+      .send({
+        name: "Pack Staff",
+        email: "pack-staff@example.com",
+        password: "Stock-test-password-123",
+        permissions: ["contacts", "purchases"],
+      });
+    expect(staff.status).toBe(201);
+    const login = () =>
+      request(app).post("/auth/login").send({
+        email: "pack-staff@example.com",
+        password: "Stock-test-password-123",
+      });
+    const full = await login();
+    const pending = await command(
+      "Pack permission demo, 10 kg, 20 bags",
+      full.body.accessToken,
+    );
+    expect(pending.body.canPreview).toBe(true);
+    await request(app)
+      .patch(`/auth/staff/${staff.body.id}`)
+      .set(bearer(token))
+      .send({ permissions: ["contacts"], active: true });
+    const limited = await login();
+    const access = limited.body.accessToken;
+    expect(
+      (
+        await request(app)
+          .post("/api/voice/catalog/confirm")
+          .set(bearer(access))
+          .send({
+            confirm: true,
+            reviewId: pending.body.catalogAction.reviewId,
+          })
+      ).status,
+    ).toBe(403);
+    expect(
+      (await command("Pack permission demo, 10 kg, 20 bags", access)).status,
+    ).toBe(403);
+    expect(
+      (
+        await request(app)
+          .post("/api/voice/stock/start")
+          .set(bearer(access))
+          .send({ productId: existing.body._id })
+      ).status,
+    ).toBe(403);
+    expect(
+      await Product.countDocuments({ ...scope, name: "Pack permission demo" }),
+    ).toBe(0);
+  });
+  it("clarifies the exact mixed Tamil product command and retains its ₹100 price until stock confirmation", async () => {
+    const { Product, Record } = await import("../src/modules/models.js");
+    const registered = await request(app).post("/auth/register").send({
+      email: "nepal-demo@example.com",
+      password: "Stock-test-password-123",
+      name: "Nepal Demo",
+      businessName: "Nepal Demo Business",
+    });
+    expect(registered.status).toBe(201);
+    const token = registered.body.accessToken;
+    const scope = { businessId: registered.body.user.businessId };
+    const command = (text: string) =>
+      request(app).post("/api/voice/text").set(bearer(token)).send({ text });
+    await request(app)
+      .post("/api/contacts")
+      .set(bearer(token))
+      .send({ name: "Nepal Demo Mill", kind: "supplier" });
+    await request(app)
+      .post("/api/voice/catalog/start")
+      .set(bearer(token))
+      .send({ kind: "product" });
+    const initial = await command(ambiguousProductCommand);
+    expect(initial.status, initial.text).toBe(200);
+    expect(initial.body.canPreview).toBe(false);
+    expect(initial.body.catalogAction.input).toMatchObject({
+      name: "நேபாள் ஜவ்வரிசி",
+      unit: "bag",
+      unitPrice: "100",
+      quantityOptions: [10, 20],
+    });
+    expect(initial.body.catalogAction.input.quantity).toBeUndefined();
+    expect(initial.body.catalogAction.input.weightGrams).toBeUndefined();
+    expect(initial.body.followUp.field).toBe("quantity");
+    expect(
+      initial.body.followUp.choices.map(
+        (choice: { value: string }) => choice.value,
+      ),
+    ).toEqual(["10", "20"]);
+    const early = await request(app)
+      .post("/api/voice/catalog/confirm")
+      .set(bearer(token))
+      .send({ confirm: true, reviewId: initial.body.catalogAction.reviewId });
+    expect(early.status).toBe(422);
+    expect(await Product.countDocuments(scope)).toBe(0);
+    const quantity = await command("20 bags");
+    expect(quantity.status).toBe(200);
+    expect(quantity.body.followUp.field).toBe("weightGrams");
+    expect(quantity.body.catalogAction.input).toMatchObject({
+      quantity: 20,
+      unitPrice: "100",
+    });
+    expect(quantity.body.catalogAction.input.quantityOptions).toBeUndefined();
+    const weight = await command("Each bag weighs 25 kilograms");
+    expect(weight.status).toBe(200);
+    expect(weight.body.canPreview).toBe(true);
+    const saved = await request(app)
+      .post("/api/voice/catalog/confirm")
+      .set(bearer(token))
+      .send({ confirm: true, reviewId: weight.body.catalogAction.reviewId });
+    expect(saved.status, saved.text).toBe(201);
+    expect(saved.body.stockEntry.input).toMatchObject({
+      quantity: 20,
+      unitPrice: "100",
+      productId: saved.body.entityId,
+    });
+    expect(saved.body.stockEntry.followUp.field).toBe("contactId");
+    expect(saved.body.stockEntry.missing).not.toContain("unitPrice");
+    const product = await Product.findById(saved.body.entityId).lean();
+    expect(product).toMatchObject({ weightGrams: 25000, unit: "bag" });
+    expect(product).not.toHaveProperty("unitPrice");
+    expect(await Record.countDocuments(scope)).toBe(0);
+    const supplier = await command("From Nepal Demo Mill");
+    expect(supplier.status, supplier.text).toBe(200);
+    expect(supplier.body.canPreview).toBe(true);
+    expect(supplier.body.input).toMatchObject({
+      quantity: 20,
+      unitPrice: "100",
+    });
+    expect(supplier.body.followUp).toBeUndefined();
+    const draft = await postDraft(supplier.body.input, token);
+    const posted = await commit(draft, token);
+    expect(posted.status, posted.text).toBe(200);
+    expect(posted.body).toMatchObject({
+      quantity: 20,
+      unitPrice: "100",
+      total: 200000,
+    });
+    const stock = await request(app)
+      .get("/api/inventory/products")
+      .set(bearer(token));
+    expect(stock.body[0]).toMatchObject({
+      available: 20,
+      weightGrams: 25000,
+      unit: "bag",
+    });
+    expect(await Record.countDocuments(scope)).toBe(1);
   });
   it("rotates refresh tokens and revokes the session on replay", async () => {
     const r = await request(app)

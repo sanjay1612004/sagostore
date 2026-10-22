@@ -246,6 +246,7 @@ export function Screen({
   onRefresh,
   maxWidth = 960,
   variant = "default",
+  footer,
 }: {
   title: string;
   subtitle?: string;
@@ -256,23 +257,59 @@ export function Screen({
   onRefresh?: () => void;
   maxWidth?: number;
   variant?: "default" | "assistant";
+  footer?: ReactNode;
 }) {
   const c = useTheme();
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
+  const hasFooter = Boolean(footer);
+  const [viewportTop, setViewportTop] = useState(0);
+  React.useEffect(() => {
+    if (Platform.OS !== "web" || !hasFooter || !window.visualViewport) return;
+    const viewport = window.visualViewport;
+    // Phone browsers can pan the visible viewport as well as shrink it when
+    // the keyboard opens. Keep the footer inside that visible area.
+    const update = () =>
+      setViewportTop(viewport.scale === 1 ? viewport.offsetTop : 0);
+    update();
+    viewport.addEventListener("resize", update);
+    viewport.addEventListener("scroll", update);
+    return () => {
+      viewport.removeEventListener("resize", update);
+      viewport.removeEventListener("scroll", update);
+    };
+  }, [hasFooter]);
+  const padding = width < 360 ? 16 : width < 600 ? 20 : 32;
   return (
     <SafeAreaView
       edges={["top", "left", "right"]}
-      style={{ flex: 1, backgroundColor: c.bg }}
+      style={{
+        flex: 1,
+        minHeight: 0,
+        backgroundColor: c.bg,
+        ...(Platform.OS === "web" && footer
+          ? {
+              maxHeight: height,
+              transform: [{ translateY: viewportTop }],
+            }
+          : {}),
+      }}
     >
       {variant === "assistant" && <AssistantBackground />}
       <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        style={{ flex: 1, minHeight: 0 }}
+        behavior={
+          Platform.OS === "ios"
+            ? "padding"
+            : Platform.OS === "android" && hasFooter
+              ? "height"
+              : undefined
+        }
       >
         <ScrollView
+          style={{ flex: 1, minHeight: 0 }}
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={{
-            padding: width < 360 ? 16 : width < 600 ? 20 : 32,
+            padding,
             paddingBottom: 40,
             gap: 20,
             ...(variant === "assistant" ? { paddingTop: 18 } : {}),
@@ -349,6 +386,20 @@ export function Screen({
           </View>
           {children}
         </ScrollView>
+        {footer && (
+          <View
+            style={{
+              width: "100%",
+              maxWidth,
+              alignSelf: "center",
+              flexShrink: 0,
+              paddingHorizontal: padding,
+              paddingVertical: 12,
+            }}
+          >
+            {footer}
+          </View>
+        )}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );

@@ -4,7 +4,12 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { router } from "expo-router";
 import { type TradeRecord } from "@tamiltrade/shared";
-import { api, type Page } from "../services/api";
+import { api, newKey, type Page } from "../services/api";
+import {
+  stockQuantity,
+  stockWeight,
+  stockUnitWeight,
+} from "../services/stock-display";
 import {
   T,
   Card,
@@ -95,15 +100,34 @@ export default function Inventory() {
                   <View style={{ flex: 1 }}>
                     <T weight="bold">{p.name}</T>
                     <T size={12} color={c.muted}>
-                      {(p.available * p.weightGrams) / 1000} kg in warehouse
+                      {stockUnitWeight(p.weightGrams, p.unit)}
+                    </T>
+                    <T size={12} color={c.muted}>
+                      {stockWeight(p.available, p.weightGrams)} in warehouse
                     </T>
                   </View>
                   <T size={24} weight="bold">
-                    {p.available} {p.unit}
+                    {stockQuantity(p.available, p.unit)}
                   </T>
                 </Row>
                 {p.available <= p.lowStockQuantity && (
                   <PaymentStatusChip label="LOW STOCK" tone="warning" />
+                )}
+                {hasPermission("purchases") && (
+                  <Button
+                    title="Add stock by voice"
+                    variant="secondary"
+                    onPress={() =>
+                      router.push({
+                        pathname: "/(tabs)/voice",
+                        params: {
+                          create: "stock",
+                          stockProductId: p._id,
+                          request: newKey(),
+                        },
+                      })
+                    }
+                  />
                 )}
               </Card>
             ))}
