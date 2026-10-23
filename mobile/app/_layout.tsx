@@ -100,7 +100,7 @@ export default function RootLayout() {
       !user &&
       Platform.OS !== "web" &&
       inAuth &&
-      segments[1] !== "login"
+      segments.at(1) !== "login"
     )
       router.replace("/(auth)/login");
     else if (user && inAuth) router.replace("/(tabs)");

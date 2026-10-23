@@ -83,6 +83,31 @@ Install `mobile/android/app/build/outputs/apk/release/app-release.apk` on the ph
 
 Use your own Expo account/project and signing credentials. The checked-in `eas.json` provides development, preview APK and production AAB profiles:
 
+The `preview` profile is configured with Node 24 and the live Oracle HTTPS API
+address in its public build environment. It creates an installable release APK
+with the JavaScript bundle included, so running Metro or Expo Go is unnecessary
+after installation. The `production` profile still requires its own explicit
+API environment configuration before a Play Store build.
+
+For the Oracle-connected Android APK, run from `mobile`:
+
+```bash
+npx eas-cli@latest login
+npx eas-cli@latest build:configure
+npx eas-cli@latest build --platform android --profile preview
+```
+
+Use your own Expo account, select Android during configuration, and allow EAS
+to generate a new Android signing keystore for this app's first distribution
+build. If a distribution keystore already exists for this package, retain it
+for subsequent updates. Open the completed build's APK link on your phone and
+install it. Connect the installed app to your existing business using a fresh
+one-time phone connection code, then verify speech and records on mobile data
+with the computer's Expo server stopped. Download an APK only after its EAS
+build reports `FINISHED`.
+
+Other build profiles:
+
 ```bash
 cd mobile
 npx eas-cli login
@@ -97,3 +122,50 @@ EAS build availability, quotas and Apple developer requirements depend on your a
 Expo public variables are bundled and visible. Include only the API URL. Never include Atlas, JWT, cloud, email or invoice signing secrets. The app bundles licensed Inter and Noto Sans Tamil fonts and uses dark mode by default, with a persisted light preference.
 
 The exported Android Hermes bundle is a compile check, **not an APK** and not a substitute for physical-device tests. Test microphone permissions, a real Tamil recording, background interruption, an expired session, query reload, confirmation retries, PDF rendering and actual native sharing on Android. Verify iOS separately before shipping an iOS release.
+
+### Android native build failure on 2026-10-23
+
+The first EAS preview build failed in Skia's CMake compilation with the compiler
+reporting `Killed`. Skia was an unused direct dependency: the microphone uses
+SVG and Reanimated, and the charts do not depend on Skia. Removed Skia and its
+otherwise unused packages from the mobile manifest and lockfile. No other
+dependency versions changed. Mobile type checking and the production Android
+Hermes export passed; Android autolinking no longer includes Skia. A fresh EAS
+preview build verified the full native APK after this change.
+
+The replacement build completed successfully (`FINISHED`) on 2026-10-23:
+[EAS build d108b8b4-862f-403c-ab04-94bc24928cd3](https://expo.dev/accounts/sanjaybalajik/projects/tamiltrade-ai/builds/d108b8b4-862f-403c-ab04-94bc24928cd3).
+[Download the preview APK](https://expo.dev/artifacts/eas/7GU1HeI4cGPbOGZlXh5-HFpIaGuNPXMlJKnKk2Nb4cg.apk).
+It uses the existing Expo-managed Android signing credentials and Oracle API
+configuration. The APK artifact returned HTTP 206 for a ranged download and
+had the expected ZIP/APK file signature (105,263,704 bytes). Physical
+installation subsequently revealed an immediate startup crash. A successful
+cloud build does not establish that the installed app runs correctly.
+
+### Standalone Android startup investigation on 2026-10-23
+
+Both the original APK and a later preview APK from the newly linked Expo team
+project closed on launch. Reproduced a JavaScript startup failure in
+`mobile/services/api.ts`: React Native defines `window`, but an embedded release
+bundle can have no `window.location`. Reading `window.location.hostname` during
+module initialization then throws before the root layout can show an error.
+Expo Go can mask this because its bundle is served from Metro and has a location.
+
+Read the hostname only on web, with an optional location check. A regression
+test imports the actual API module with `__DEV__ = false` and `window = {}`;
+it failed with the hostname TypeError before the fix and passes afterward.
+All 19 API startup/discovery tests, the mobile type check, and the production
+Android Hermes export pass. Replacement preview build
+[dc9499cb-5a25-4282-bb46-cfa7add98426](https://expo.dev/accounts/sanjaybalajiks-team/projects/sri-sai-ganesh-stores/builds/dc9499cb-5a25-4282-bb46-cfa7add98426)
+completed successfully with the existing team project's signing credentials
+and Oracle API environment. USB debugging on the connected OnePlus phone confirmed the same
+fatal JavaScript error: `Cannot read property 'hostname' of undefined` in the
+installed app's AndroidRuntime log.
+
+[Download the corrected APK](https://expo.dev/artifacts/eas/y4S0j3N3ZJ8JZXUsodKWH2WFXdHArfhFchsgFQcN02o.apk).
+Installed it with `adb install -r` successfully on the connected OnePlus Nord 5
+(Android 16), retaining app data. Two cold launches succeeded. The app displayed
+the **Connect your phone** screen; after the second launch its process remained
+running in the foreground for at least 15 seconds with no AndroidRuntime or
+ReactNativeJS errors. Phone connection and business workflows in this APK remain
+to be tested after entering a fresh one-time connection code.

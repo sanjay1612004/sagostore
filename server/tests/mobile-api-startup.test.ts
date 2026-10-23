@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 vi.mock("expo-crypto", () => {
@@ -15,15 +15,31 @@ vi.mock("../../mobile/store/session", () => ({
   useSession: { getState: () => ({ accessToken: null }) },
 }));
 
-afterAll(() => {
+beforeEach(() => {
+  vi.resetModules();
+  vi.stubGlobal("__DEV__", true);
+  vi.stubEnv("EXPO_PUBLIC_API_URL", "http://192.168.1.92:5000");
+});
+
+afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
 
 describe("mobile API startup without ExpoCrypto", () => {
+  it("loads a standalone Android bundle when window has no browser location", async () => {
+    vi.stubGlobal("__DEV__", false);
+    vi.stubGlobal("window", {});
+    vi.stubEnv(
+      "EXPO_PUBLIC_API_URL",
+      "https://tamiltrade-132-226-103-170.sslip.io",
+    );
+    const { apiUrl } = await vi.importActual<{ apiUrl: string }>(
+      "../../mobile/services/api.ts",
+    );
+    expect(apiUrl).toBe("https://tamiltrade-132-226-103-170.sslip.io");
+  });
   it("loads the API and creates valid idempotency keys when the optional crypto module is absent", async () => {
-    vi.stubGlobal("__DEV__", true);
-    vi.stubEnv("EXPO_PUBLIC_API_URL", "http://192.168.1.92:5000");
     const { apiUrl, newKey } = await vi.importActual<{
       apiUrl: string;
       newKey: () => string;
@@ -36,7 +52,6 @@ describe("mobile API startup without ExpoCrypto", () => {
     expect(first).not.toBe(second);
   });
   it("reports multipart serialization failures without blaming server connectivity", async () => {
-    vi.stubGlobal("__DEV__", true);
     vi.stubGlobal(
       "fetch",
       vi

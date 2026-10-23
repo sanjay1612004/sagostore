@@ -14,11 +14,14 @@ import {
   ensureIndexes,
   type VoiceJobDoc,
   QueueState,
-  Contact,
-  Product,
+  Conversation,
 } from "../modules/models.js";
 import { understand } from "../modules/voice.js";
-import { tamilSpeechForm, tamilSpeechPrompt } from "../shared/speech.js";
+import {
+  speechChoiceNames,
+  tamilSpeechForm,
+  tamilSpeechPrompt,
+} from "../shared/speech.js";
 import { transcribeSarvam, SpeechRecognitionError } from "../modules/sarvam.js";
 import { speechSettings } from "../shared/speech-settings.js";
 import {
@@ -145,25 +148,14 @@ async function processJob(job: mongoose.HydratedDocument<VoiceJobDoc>) {
       ],
       15000,
     );
-    // Both cloud and local recognition need this business's saved spellings.
-    // Prioritize canonical names before aliases within the provider's hint cap.
-    const [contacts, products] = await Promise.all([
-      Contact.find({ businessId: job.businessId })
-        .select("name aliases")
-        .sort({ updatedAt: -1 })
-        .limit(30)
-        .lean(),
-      Product.find({ businessId: job.businessId })
-        .select("name")
-        .sort({ updatedAt: -1 })
-        .limit(10)
-        .lean(),
-    ]);
-    const names = [
-      ...contacts.map((contact) => contact.name),
-      ...products.map((product) => product.name),
-      ...contacts.flatMap((contact) => contact.aliases ?? []),
-    ];
+    const conversation = await Conversation.findOne({
+      businessId: job.businessId,
+      userId: job.userId,
+      expiresAt: { $gt: new Date() },
+    })
+      .select("pendingCatalogAction pendingQuestion")
+      .lean();
+    const names = speechChoiceNames(conversation ?? undefined);
     let transcript: string;
     const transcriptionStartedAt = Date.now();
     if (env.SPEECH_ENGINE === "sarvam") {

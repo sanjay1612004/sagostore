@@ -1,11 +1,54 @@
 import { describe, it, expect } from "vitest";
 import {
   speechKeyterms,
+  speechChoiceNames,
   tamilSpeechForm,
   tamilSpeechPrompt,
 } from "../src/shared/speech.js";
 
 describe("cloud speech vocabulary", () => {
+  it("does not seed free-form speech or new-name entry with saved stores", () => {
+    expect(speechChoiceNames()).toEqual([]);
+    for (const kind of ["customer", "supplier", "product"]) {
+      expect(
+        speechChoiceNames({
+          pendingCatalogAction: { kind, input: { name: "Sarawasti Store" } },
+          pendingQuestion: {
+            field: "name",
+            choices: [{ label: "Sarawasti Store" }],
+          },
+        }),
+      ).toEqual([]);
+    }
+  });
+  it("hints only the entity choices actually offered in the current question", () => {
+    expect(
+      speechChoiceNames({
+        pendingQuestion: {
+          field: "contactId",
+          choices: [{ label: "Wow Store" }, { label: "ABC Mill" }],
+        },
+      }),
+    ).toEqual(["Wow Store", "ABC Mill"]);
+    expect(
+      speechChoiceNames({
+        pendingQuestion: { field: "productId", choices: [{ label: "Sago" }] },
+      }),
+    ).toEqual(["Sago"]);
+    for (const field of [
+      "name",
+      "quantity",
+      "unitPrice",
+      "sourceId",
+      "clarification",
+    ]) {
+      expect(
+        speechChoiceNames({
+          pendingQuestion: { field, choices: [{ label: "Sarawasti Store" }] },
+        }),
+      ).toEqual([]);
+    }
+  });
   it("keeps complete store phrases, normalizes whitespace and deduplicates names", () => {
     expect(
       speechKeyterms([" Wow\nStore ", "WOW Store", "வாவ் ஸ்டோர்", "", "  "]),

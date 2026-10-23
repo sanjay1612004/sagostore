@@ -24,7 +24,7 @@ npm run dev:server
 
 To run them separately, use `npm run dev:api -w server` and `npm run worker -w server` in separate terminals. Keep the worker terminal running; an API alone accepts typed commands but cannot transcribe recordings. `GET /api/voice/config` reports worker heartbeat availability separately from key readiness. A missing worker prevents new upload admission and leaves any existing queued recording visible with an offline explanation and Cancel control.
 
-Cloud mode needs no local Whisper model or `whisper-server`. Audio is still validated and converted to mono 16 kHz WAV, then sent by the worker over HTTPS to `https://api.sarvam.ai/speech-to-text`. For Saaras v4, the worker also sends bounded recognition hints from this business's saved customer/supplier names, product names and contact aliases (30 recently updated contacts and 10 products; at most 50 distinct phrases, each at most 64 characters). These names help recognize mixed Tamil/English store names; they do not guarantee accuracy and are never inserted into the returned transcript. Add alternate Tamil spellings as contact aliases when useful. Saaras v3 omits this unsupported field. See [Sarvam keyterm prompting](https://docs.sarvam.ai/api/api-guides-tutorials/speech-to-text/how-to/keyterms).
+Cloud mode needs no local Whisper model or `whisper-server`. Audio is still validated and converted to mono 16 kHz WAV, then sent by the worker over HTTPS to `https://api.sarvam.ai/speech-to-text`. For Saaras v4, the worker sends name hints only when answering a current customer/supplier or product selection question, using the choices actually displayed. Free-form recordings and customer/supplier/product creation or correction omit saved-name hints, so unfamiliar names are not biased toward existing stores. Hints are bounded to 50 distinct phrases of at most 64 characters, never inserted into the transcript, and do not guarantee recognition accuracy. Saaras v3 omits this unsupported field. See [Sarvam keyterm prompting](https://docs.sarvam.ai/api/api-guides-tutorials/speech-to-text/how-to/keyterms).
 
 Sarvam charges according to the account's usage plan; the application does not automatically retry billable recognition requests. Keep the API key out of mobile configuration, source control, logs and chat messages. The app displays that cloud recognition sends recordings to a speech service.
 
@@ -66,7 +66,7 @@ For a development-only CLI fallback, use `SPEECH_ENGINE=cli`, set `WHISPER_CLI_P
 
 ## Tamil accuracy
 
-The worker explicitly requests Tamil transcription (`language=ta`, `translate=false`) and uses beam search with `SPEECH_BEAM_SIZE=5` by default. It supplies a short vocabulary hint containing business terms and this business's saved product/contact names and aliases. These hints can help recognition but do not guarantee correct names or amounts.
+The worker explicitly requests Tamil transcription (`language=ta`, `translate=false`) and uses beam search with `SPEECH_BEAM_SIZE=5` by default. It supplies a short vocabulary hint containing business terms. Saved names are included only for a current entity selection question; free-form recordings and new-name entry omit saved names. These hints can help recognition but do not guarantee correct names or amounts.
 
 If Base mishears Tamil, try the larger multilingual Small model locally:
 

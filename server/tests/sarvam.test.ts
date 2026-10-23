@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { transcribeSarvam } from "../src/modules/sarvam.js";
 import { speechSettings } from "../src/shared/speech-settings.js";
+import { speechChoiceNames } from "../src/shared/speech.js";
 
 const wav = new Uint8Array([82, 73, 70, 70, 0, 0, 0, 0, 87, 65, 86, 69]);
 const options = {
@@ -15,6 +16,32 @@ afterEach(() => {
 });
 
 describe("Sarvam Tamil-English transcription", () => {
+  it.each([
+    "There is a new customer whose name is Saravana Kumar",
+    "புதிய கஸ்டமர் பெயர் சரவண குமார்",
+  ])(
+    "transcribes new names without sending saved-store bias: %s",
+    async (transcript) => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(Response.json({ transcript }));
+      vi.stubGlobal("fetch", fetchMock);
+      const keyterms = speechChoiceNames({
+        pendingCatalogAction: { kind: "customer" },
+        pendingQuestion: {
+          field: "name",
+          choices: [{ label: "Sarawasti Store" }],
+        },
+      });
+      expect(await transcribeSarvam(wav, { ...options, keyterms })).toBe(
+        transcript,
+      );
+      const form = fetchMock.mock.calls[0]![1].body as FormData;
+      expect(form.has("keyterms")).toBe(false);
+      expect(form.get("mode")).toBe("codemix");
+      expect(fetchMock).toHaveBeenCalledOnce();
+    },
+  );
   it("uses automatic language detection and codemix without translating or changing names and amounts", async () => {
     const transcript = "ரமேஷ் storeக்கு 50 bags வித்தேன். Per bag 3500 rupees.";
     const fetchMock = vi

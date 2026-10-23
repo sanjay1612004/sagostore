@@ -85,7 +85,7 @@ Integration tests run a temporary MongoDB **replica set solely for testing**, wi
 | Directory            | Responsibility                                                   |
 | -------------------- | ---------------------------------------------------------------- |
 | `mobile/app`         | Native routes, business forms, voice recording and sharing       |
-| `mobile/components`  | Theme-aware reusable native components and Skia microphone       |
+| `mobile/components`  | Theme-aware native components and SVG/Reanimated microphone      |
 | `packages/shared`    | Zod contracts and API types                                      |
 | `server/src/modules` | Auth, trading, reporting, Groq extraction/validation, invoices   |
 | `server/src/workers` | Bounded audio-processing worker                                  |

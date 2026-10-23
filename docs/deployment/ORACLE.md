@@ -1,6 +1,6 @@
 # Oracle Ampere A1 deployment
 
-These are reviewable instructions and templates. No VM has been provisioned or account changed. Verify the **Always Free-eligible** designation and your tenancy's current limits in Oracle Console before creating resources. Oracle's current public Free Tier page lists 2 Ampere cores / 12 GB for the free allocation; older examples quoting 4 / 24 should not be treated as your entitlement. Capacity can be unavailable.
+These are general instructions and templates. See [the deployment record](ORACLE-STATUS.md) for the actual Oracle VM, live API address, verification, and remaining acceptance checks. Verify the **Always Free-eligible** designation and your tenancy's current limits in Oracle Console before creating resources. Oracle's current public Free Tier page lists 2 Ampere cores / 12 GB for the free allocation; older examples quoting 4 / 24 should not be treated as your entitlement. Capacity can be unavailable.
 
 References: [Oracle Free Tier](https://www.oracle.com/cloud/free/), [Always Free resources](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm).
 
@@ -51,4 +51,4 @@ Set up encrypted backups and a restore drill before relying on records. Configur
 
 Prepare and validate a release before running `infra/deployment/activate.sh /opt/tamiltrade/releases/RELEASE_ID`. It switches the symlink, restarts API/worker and polls readiness; it restores the previous release when readiness fails. This script does not provision resources or silently change database schemas. Index changes must remain compatible with the previous release if rollback is required.
 
-No deployment, TLS renewal, VM reboot or rollback drill has been executed in this project yet; record those results in the acceptance report after infrastructure exists.
+Record deployment, TLS renewal, VM reboot, and rollback drill results in the deployment record or acceptance report. Do not infer completion from the template commands alone.

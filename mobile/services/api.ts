@@ -21,7 +21,9 @@ const apiConfiguration = resolveApiUrl({
   platform: Platform.OS,
   hostUri: Constants.expoConfig?.hostUri,
   browserHostname:
-    typeof window === "undefined" ? undefined : window.location.hostname,
+    Platform.OS === "web" && typeof window !== "undefined"
+      ? window.location?.hostname
+      : undefined,
 });
 export const apiUrl = apiConfiguration.url;
 export class ApiError extends Error {

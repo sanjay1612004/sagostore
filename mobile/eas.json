@@ -4,6 +4,11 @@
     "development": { "developmentClient": true, "distribution": "internal" },
     "preview": {
       "distribution": "internal",
+      "node": "24.22.1",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://tamiltrade-132-226-103-170.sslip.io",
+        "EXPO_PUBLIC_WEB_API_URL": "https://tamiltrade-132-226-103-170.sslip.io"
+      },
       "android": { "buildType": "apk" }
     },
     "production": { "android": { "buildType": "app-bundle" } }

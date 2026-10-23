@@ -19,7 +19,6 @@
     "@expo/metro-runtime": "~58.0.14",
     "@hookform/resolvers": "^5.2.2",
     "@react-native-community/datetimepicker": "9.2.1",
-    "@shopify/react-native-skia": "2.14.0",
     "@tamiltrade/shared": "0.1.0",
     "@tanstack/react-query": "^5.90.6",
     "expo": "~58.0.12",

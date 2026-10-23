@@ -2,6 +2,22 @@
 const vocabulary =
   "வாங்கினேன், விற்றேன், மூட்டை, கிலோ, ரூபாய், விலை, லாரி வாடகை, பாக்கி, GPay";
 
+// A free-form recording may introduce an unfamiliar person or product. Only
+// boost saved spellings when the user is answering displayed entity choices.
+export function speechChoiceNames(context?: {
+  pendingCatalogAction?: unknown;
+  pendingQuestion?: {
+    field?: string;
+    choices?: { label: string }[];
+  };
+}) {
+  if (context?.pendingCatalogAction) return [];
+  const question = context?.pendingQuestion;
+  return question?.field === "contactId" || question?.field === "productId"
+    ? (question.choices ?? []).map((choice) => choice.label)
+    : [];
+}
+
 // Saaras v4 accepts at most 50 distinct phrases of up to 64 characters.
 // Hints help recognition; never insert them into a returned transcript.
 export function speechKeyterms(names: string[]) {
